@@ -11,6 +11,7 @@
 #   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
+import logging
 import warnings
 
 import numpy as np
@@ -143,7 +144,7 @@ class TestSMC(SeededTest):
                 a = pm.Beta("a", alpha, beta)
                 y = pm.Bernoulli("y", a, observed=data)
                 trace = pm.sample_smc(2000, chains=2, return_inferencedata=False)
-            # log_marignal_likelihood is found in the last value of each chain
+            # log_marginal_likelihood is found in the last value of each chain
             lml = np.mean([chain[-1] for chain in trace.report.log_marginal_likelihood])
             marginals.append(lml)
 
@@ -215,13 +216,11 @@ class TestSMC(SeededTest):
         assert mt.nchains == chains
         assert mt["x"].size == chains * draws
 
-    def test_convergence_checks(self):
-        with self.fast_model:
-            with pytest.warns(
-                UserWarning,
-                match="The number of samples is too small",
-            ):
+    def test_convergence_checks(self, caplog):
+        with caplog.at_level(logging.INFO):
+            with self.fast_model:
                 pm.sample_smc(draws=99)
+        assert "The number of samples is too small" in caplog.text
 
     def test_deprecated_parallel_arg(self):
         with self.fast_model:

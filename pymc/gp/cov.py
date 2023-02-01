@@ -34,6 +34,7 @@ __all__ = [
     "Exponential",
     "Matern52",
     "Matern32",
+    "Matern12",
     "Linear",
     "Polynomial",
     "Cosine",
@@ -444,7 +445,7 @@ class Periodic(Stationary):
 
 class ExpQuad(Stationary):
     r"""
-    The Exponentiated Quadratic kernel.  Also refered to as the Squared
+    The Exponentiated Quadratic kernel.  Also referred to as the Squared
     Exponential, or Radial Basis Function kernel.
 
     .. math::
@@ -515,7 +516,9 @@ class Matern12(Stationary):
     r"""
     The Matern kernel with nu = 1/2
 
-    k(x, x') = \mathrm{exp}\left[ -\frac{(x - x')^2}{\ell} \right]
+    .. math::
+
+        k(x, x') = \mathrm{exp}\left[ -\frac{(x - x')^2}{\ell} \right]
     """
 
     def full(self, X, Xs=None):

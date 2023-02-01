@@ -214,11 +214,9 @@ class InferenceDataConverter:  # pylint: disable=too-many-instance-attributes
         }
 
         self.dims = {} if dims is None else dims
-        model_dims = {
-            var_name: [dim for dim in dims if dim is not None]
-            for var_name, dims in self.model.named_vars_to_dims.items()
-        }
+        model_dims = {k: list(v) for k, v in self.model.named_vars_to_dims.items()}
         self.dims = {**model_dims, **self.dims}
+
         if sample_dims is None:
             sample_dims = ["chain", "draw"]
         self.sample_dims = sample_dims
@@ -297,10 +295,12 @@ class InferenceDataConverter:  # pylint: disable=too-many-instance-attributes
                 continue
             if self.warmup_trace:
                 data_warmup[name] = np.array(
-                    self.warmup_trace.get_sampler_stats(stat, combine=False)
+                    self.warmup_trace.get_sampler_stats(stat, combine=False, squeeze=False)
                 )
             if self.posterior_trace:
-                data[name] = np.array(self.posterior_trace.get_sampler_stats(stat, combine=False))
+                data[name] = np.array(
+                    self.posterior_trace.get_sampler_stats(stat, combine=False, squeeze=False)
+                )
 
         return (
             dict_to_dataset(
@@ -522,7 +522,7 @@ def predictions_to_inference_data(
         a deterministic function of the shape of any predictor (explanatory, independent, etc.)
         variables must be *removed* from this trace.
     model: Model
-        The pymc model. It can be ommited if within a model context.
+        The pymc model. It can be omitted if within a model context.
     coords: Dict[str, array-like[Any]]
         Coordinates for the variables.  Map from coordinate names to coordinate values.
     dims: Dict[str, array-like[str]]

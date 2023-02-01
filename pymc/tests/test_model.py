@@ -356,6 +356,9 @@ class TestValueGradFunction(unittest.TestCase):
 
         assert m["x2_missing"].type == gf._extra_vars_shared["x2_missing"].type
 
+        # The dtype of the merged observed/missing deterministic should match the RV dtype
+        assert m.deterministics[0].type.dtype == x2.type.dtype
+
         pnt = m.initial_point(random_seed=None).copy()
         del pnt["x2_missing"]
 
@@ -812,7 +815,7 @@ def test_add_coord_mutable_kwarg():
 
 
 def test_set_dim():
-    """Test the concious re-sizing of dims created through add_coord()."""
+    """Test the conscious re-sizing of dims created through add_coord()."""
     with pm.Model() as pmodel:
         pmodel.add_coord("fdim", mutable=False, length=1)
         pmodel.add_coord("mdim", mutable=True, length=2)
@@ -866,6 +869,23 @@ def test_add_named_variable_checks_dim_name():
         rv2 = rv[:, None]
         rv2.name = "yumyum"
         pmodel.add_named_variable(rv2, dims=("nomnom", None))
+
+
+def test_dims_type_check():
+    with pm.Model(coords={"a": range(5)}) as m:
+        with pytest.raises(TypeError, match="Dims must be string"):
+            x = pm.Normal("x", shape=(10, 5), dims=(None, "a"))
+
+
+def test_none_coords_autonumbering():
+    with pm.Model() as m:
+        m.add_coord(name="a", values=None, length=3)
+        m.add_coord(name="b", values=range(5))
+        x = pm.Normal("x", dims=("a", "b"))
+        prior = pm.sample_prior_predictive(samples=2).prior
+    assert prior["x"].shape == (1, 2, 3, 5)
+    assert list(prior.coords["a"].values) == list(range(3))
+    assert list(prior.coords["b"].values) == list(range(5))
 
 
 def test_set_data_indirect_resize():
@@ -1081,7 +1101,7 @@ class TestModelContext:
 
         This test creates two threads that attempt to construct two
         unrelated models at the same time.
-        For repeatable testing, the two threads are syncronised such
+        For repeatable testing, the two threads are synchronised such
         that thread A enters the context manager first, then B,
         then A attempts to declare a variable while B is still in the context manager.
         """
@@ -1473,7 +1493,7 @@ def test_tag_future_warning_model():
         x.tag.test_value = 0
         assert not isinstance(x.tag, _FutureWarningValidatingScratchpad)
 
-        # Test that model changes the tag type, but copies exsiting contents
+        # Test that model changes the tag type, but copies existing contents
         x = model.register_rv(x, name="x", transform=log)
         assert isinstance(x.tag, _FutureWarningValidatingScratchpad)
         assert x.tag.something_else == "5"
