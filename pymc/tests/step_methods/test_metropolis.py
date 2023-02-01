@@ -1,4 +1,4 @@
-#   Copyright 2020 The PyMC Developers
+#   Copyright 2023 The PyMC Developers
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -138,6 +138,9 @@ class TestDEMetropolis:
             pm.Normal("n", mu=0, sigma=1, size=(2, 3))
 
             step = DEMetropolis()
+            assert step.tune == "scaling"
+
+            step = DEMetropolis(tune=None)
             assert step.tune is None
 
             step = DEMetropolis(tune="scaling")
