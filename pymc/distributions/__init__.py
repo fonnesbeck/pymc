@@ -12,11 +12,6 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-from pymc.distributions.logprob import (  # isort:skip
-    logcdf,
-    logp,
-)
-
 from pymc.distributions.bound import Bound
 from pymc.distributions.censored import Censored
 from pymc.distributions.continuous import (
@@ -60,8 +55,6 @@ from pymc.distributions.discrete import (
     BetaBinomial,
     Binomial,
     Categorical,
-    Constant,
-    DiracDelta,
     DiscreteUniform,
     DiscreteWeibull,
     Geometric,
@@ -70,19 +63,27 @@ from pymc.distributions.discrete import (
     OrderedLogistic,
     OrderedProbit,
     Poisson,
-    ZeroInflatedBinomial,
-    ZeroInflatedNegativeBinomial,
-    ZeroInflatedPoisson,
 )
 from pymc.distributions.distribution import (
     Continuous,
     CustomDist,
     DensityDist,
+    DiracDelta,
     Discrete,
     Distribution,
     SymbolicRandomVariable,
 )
-from pymc.distributions.mixture import Mixture, NormalMixture
+from pymc.distributions.mixture import (
+    HurdleGamma,
+    HurdleLogNormal,
+    HurdleNegativeBinomial,
+    HurdlePoisson,
+    Mixture,
+    NormalMixture,
+    ZeroInflatedBinomial,
+    ZeroInflatedNegativeBinomial,
+    ZeroInflatedPoisson,
+)
 from pymc.distributions.multivariate import (
     CAR,
     Dirichlet,
@@ -144,7 +145,6 @@ __all__ = [
     "Poisson",
     "NegativeBinomial",
     "DiracDelta",
-    "Constant",
     "ZeroInflatedPoisson",
     "ZeroInflatedNegativeBinomial",
     "ZeroInflatedBinomial",
@@ -199,6 +199,8 @@ __all__ = [
     "Censored",
     "CAR",
     "PolyaGamma",
-    "logp",
-    "logcdf",
+    "HurdleGamma",
+    "HurdleLogNormal",
+    "HurdleNegativeBinomial",
+    "HurdlePoisson",
 ]

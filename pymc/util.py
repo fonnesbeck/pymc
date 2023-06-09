@@ -350,7 +350,6 @@ class WithMemoization:
 
 
 def locally_cachedmethod(f):
-
     from collections import defaultdict
 
     def self_cache_fn(f_name):
@@ -490,7 +489,6 @@ class _FutureWarningValidatingScratchpad(ValidatingScratchpad):
         for deprecated_names, alternative in (
             (("value_var", "observations"), "model.rvs_to_values[rv]"),
             (("transform",), "model.rvs_to_transforms[rv]"),
-            (("total_size",), "model.rvs_to_total_sizes[rv]"),
         ):
             if name in deprecated_names:
                 try:
@@ -512,3 +510,10 @@ def _add_future_warning_tag(var) -> None:
         for k, v in old_tag.__dict__.items():
             new_tag.__dict__.setdefault(k, v)
         var.tag = new_tag
+
+
+def makeiter(a):
+    if isinstance(a, (tuple, list)):
+        return a
+    else:
+        return [a]

@@ -32,7 +32,7 @@ from pymc.blocking import DictToArrayBijection
 from pymc.exceptions import SamplingError
 from pymc.util import RandomSeed
 
-logger = logging.getLogger("pymc")
+logger = logging.getLogger(__name__)
 
 
 class ParallelSamplingError(Exception):
@@ -377,7 +377,6 @@ class ParallelSampler:
         progressbar: bool = True,
         mp_ctx=None,
     ):
-
         if any(len(arg) != chains for arg in [seeds, start_points]):
             raise ValueError("Number of seeds and start_points must be %s." % chains)
 

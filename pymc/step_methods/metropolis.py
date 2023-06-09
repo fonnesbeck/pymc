@@ -19,7 +19,7 @@ import pytensor
 import scipy.linalg
 import scipy.special
 
-from pytensor import tensor as at
+from pytensor import tensor as pt
 from pytensor.graph.fg import MissingInputError
 from pytensor.tensor.random.basic import BernoulliRV, CategoricalRV
 
@@ -117,14 +117,12 @@ class Metropolis(ArrayStepShared):
     name = "metropolis"
 
     default_blocked = False
-    stats_dtypes = [
-        {
-            "accept": np.float64,
-            "accepted": np.float64,
-            "tune": bool,
-            "scaling": np.float64,
-        }
-    ]
+    stats_dtypes_shapes = {
+        "accept": (np.float64, []),
+        "accepted": (np.float64, []),
+        "tune": (bool, []),
+        "scaling": (np.float64, []),
+    }
 
     def __init__(
         self,
@@ -235,7 +233,6 @@ class Metropolis(ArrayStepShared):
         return
 
     def astep(self, q0: RaveledVars) -> Tuple[RaveledVars, StatsType]:
-
         point_map_info = q0.point_map_info
         q0d = q0.data
 
@@ -260,6 +257,7 @@ class Metropolis(ArrayStepShared):
             q = floatX(q0d + delta)
 
         if self.elemwise_update:
+            q0d = q0d.copy()
             q_temp = q0d.copy()
             # Shuffle order of updates (probably we don't need to do this in every step)
             np.random.shuffle(self.enum_dims)
@@ -267,7 +265,7 @@ class Metropolis(ArrayStepShared):
                 q_temp[i] = q[i]
                 accept_rate_i = self.delta_logp(q_temp, q0d)
                 q_temp_, accepted_i = metrop_select(accept_rate_i, q_temp, q0d)
-                q_temp[i] = q_temp_[i]
+                q_temp[i] = q0d[i] = q_temp_[i]
                 self.accept_rate_iter[i] = accept_rate_i
                 self.accepted_iter[i] = accepted_i
                 self.accepted_sum[i] += accepted_i
@@ -364,16 +362,13 @@ class BinaryMetropolis(ArrayStep):
 
     name = "binary_metropolis"
 
-    stats_dtypes = [
-        {
-            "accept": np.float64,
-            "tune": bool,
-            "p_jump": np.float64,
-        }
-    ]
+    stats_dtypes_shapes = {
+        "accept": (np.float64, []),
+        "tune": (bool, []),
+        "p_jump": (np.float64, []),
+    }
 
     def __init__(self, vars, scaling=1.0, tune=True, tune_interval=100, model=None):
-
         model = pm.modelcontext(model)
 
         self.scaling = scaling
@@ -464,7 +459,6 @@ class BinaryGibbsMetropolis(ArrayStep):
     name = "binary_gibbs_metropolis"
 
     def __init__(self, vars, order="random", transit_p=0.8, model=None):
-
         model = pm.modelcontext(model)
 
         # transition probabilities
@@ -550,7 +544,6 @@ class CategoricalGibbsMetropolis(ArrayStep):
     name = "categorical_gibbs_metropolis"
 
     def __init__(self, vars, proposal="uniform", order="random", model=None):
-
         model = pm.modelcontext(model)
 
         vars = get_value_vars_from_user_vars(vars, model)
@@ -563,7 +556,6 @@ class CategoricalGibbsMetropolis(ArrayStep):
         # variable with M categories and y being a 3-D variable with N
         # categories, we will have dimcats = [(0, M), (1, M), (2, N), (3, N), (4, N)].
         for v in vars:
-
             v_init_val = initial_point[v.name]
 
             rv_var = model.values_to_rvs[v]
@@ -731,15 +723,13 @@ class DEMetropolis(PopulationArrayStepShared):
     name = "DEMetropolis"
 
     default_blocked = True
-    stats_dtypes = [
-        {
-            "accept": np.float64,
-            "accepted": bool,
-            "tune": bool,
-            "scaling": np.float64,
-            "lambda": np.float64,
-        }
-    ]
+    stats_dtypes_shapes = {
+        "accept": (np.float64, []),
+        "accepted": (bool, []),
+        "tune": (bool, []),
+        "scaling": (np.float64, []),
+        "lambda": (np.float64, []),
+    }
 
     def __init__(
         self,
@@ -754,7 +744,6 @@ class DEMetropolis(PopulationArrayStepShared):
         mode=None,
         **kwargs
     ):
-
         model = pm.modelcontext(model)
         initial_values = model.initial_point()
         initial_values_size = sum(initial_values[n.name].size for n in model.value_vars)
@@ -791,7 +780,6 @@ class DEMetropolis(PopulationArrayStepShared):
         super().__init__(vars, shared)
 
     def astep(self, q0: RaveledVars) -> Tuple[RaveledVars, StatsType]:
-
         point_map_info = q0.point_map_info
         q0d = q0.data
 
@@ -878,15 +866,13 @@ class DEMetropolisZ(ArrayStepShared):
     name = "DEMetropolisZ"
 
     default_blocked = True
-    stats_dtypes = [
-        {
-            "accept": np.float64,
-            "accepted": bool,
-            "tune": bool,
-            "scaling": np.float64,
-            "lambda": np.float64,
-        }
-    ]
+    stats_dtypes_shapes = {
+        "accept": (np.float64, []),
+        "accepted": (bool, []),
+        "tune": (bool, []),
+        "scaling": (np.float64, []),
+        "lambda": (np.float64, []),
+    }
 
     def __init__(
         self,
@@ -958,7 +944,6 @@ class DEMetropolisZ(ArrayStepShared):
         return
 
     def astep(self, q0: RaveledVars) -> Tuple[RaveledVars, StatsType]:
-
         point_map_info = q0.point_map_info
         q0d = q0.data
 
@@ -1034,9 +1019,9 @@ def sample_except(limit, excluded):
 
 def delta_logp(
     point: Dict[str, np.ndarray],
-    logp: at.TensorVariable,
-    vars: List[at.TensorVariable],
-    shared: Dict[at.TensorVariable, at.sharedvar.TensorSharedVariable],
+    logp: pt.TensorVariable,
+    vars: List[pt.TensorVariable],
+    shared: Dict[pt.TensorVariable, pt.sharedvar.TensorSharedVariable],
 ) -> pytensor.compile.Function:
     [logp0], inarray0 = join_nonshared_inputs(
         point=point, outputs=[logp], inputs=vars, shared_inputs=shared

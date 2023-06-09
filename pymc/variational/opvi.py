@@ -51,9 +51,11 @@ import collections
 import itertools
 import warnings
 
+from typing import Any
+
 import numpy as np
 import pytensor
-import pytensor.tensor as at
+import pytensor.tensor as pt
 import xarray
 
 from pytensor.graph.basic import Variable
@@ -63,7 +65,6 @@ import pymc as pm
 from pymc.backends.base import MultiTrace
 from pymc.backends.ndarray import NDArray
 from pymc.blocking import DictToArrayBijection
-from pymc.distributions.logprob import _get_scaling
 from pymc.initial_point import make_initial_point_fn
 from pymc.model import modelcontext
 from pymc.pytensorf import (
@@ -71,7 +72,6 @@ from pymc.pytensorf import (
     compile_pymc,
     find_rng_nodes,
     identity,
-    makeiter,
     reseed_rngs,
 )
 from pymc.util import (
@@ -79,7 +79,9 @@ from pymc.util import (
     WithMemoization,
     _get_seeds_per_chain,
     locally_cachedmethod,
+    makeiter,
 )
+from pymc.variational.minibatch_rv import MinibatchRandomVariable, get_scaling
 from pymc.variational.updates import adagrad_window
 from pymc.vartypes import discrete_types
 
@@ -158,7 +160,7 @@ def try_to_set_test_value(node_in, node_out, s):
     _s = s
     if s is None:
         s = 1
-    s = pytensor.compile.view_op(at.as_tensor(s))
+    s = pytensor.compile.view_op(pt.as_tensor(s))
     if not isinstance(node_in, (list, tuple)):
         node_in = [node_in]
     if not isinstance(node_out, (list, tuple)):
@@ -673,11 +675,11 @@ class Group(WithMemoization):
     initial_dist_map = 0.0
 
     # for handy access using class methods
-    __param_spec__ = dict()
+    __param_spec__: dict = dict()
     short_name = ""
-    alias_names = frozenset()
-    __param_registry = dict()
-    __name_registry = dict()
+    alias_names: frozenset[str] = frozenset()
+    __param_registry: dict[frozenset, Any] = dict()
+    __name_registry: dict[str, Any] = dict()
 
     @classmethod
     def register(cls, sbcls):
@@ -803,7 +805,7 @@ class Group(WithMemoization):
         spec = self.get_param_spec_for(d=self.ddim, **kwargs.pop("spec_kw", {}))
         for name, param in self.user_params.items():
             shape = spec[name]
-            self._user_params[name] = at.as_tensor(param).reshape(shape)
+            self._user_params[name] = pt.as_tensor(param).reshape(shape)
         return True
 
     def _initial_type(self, name):
@@ -817,7 +819,7 @@ class Group(WithMemoization):
         -------
         tensor
         """
-        return at.matrix(name)
+        return pt.matrix(name)
 
     def _input_type(self, name):
         R"""*Dev* - input type with given name. The correct type depends on `self.batched`
@@ -830,7 +832,7 @@ class Group(WithMemoization):
         -------
         tensor
         """
-        return at.vector(name)
+        return pt.vector(name)
 
     @pytensor.config.change_flags(compute_test_value="off")
     def __init_group__(self, group):
@@ -907,7 +909,7 @@ class Group(WithMemoization):
         -------
         shape vector
         """
-        return at.stack([size, dim])
+        return pt.stack([size, dim])
 
     @node_property
     def ndim(self):
@@ -948,18 +950,18 @@ class Group(WithMemoization):
             deterministic = np.int8(deterministic)
         dim, dist_name, dist_map = (self.ddim, self.initial_dist_name, self.initial_dist_map)
         dtype = self.symbolic_initial.dtype
-        dim = at.as_tensor(dim)
-        size = at.as_tensor(size)
+        dim = pt.as_tensor(dim)
+        size = pt.as_tensor(size)
         shape = self._new_initial_shape(size, dim, more_replacements)
         # apply optimizations if possible
         if not isinstance(deterministic, Variable):
             if deterministic:
-                return at.ones(shape, dtype) * dist_map
+                return pt.ones(shape, dtype) * dist_map
             else:
-                return getattr(at.random, dist_name)(size=shape)
+                return getattr(pt.random, dist_name)(size=shape)
         else:
-            sample = getattr(at.random, dist_name)(size=shape)
-            initial = at.switch(deterministic, at.ones(shape, dtype) * dist_map, sample)
+            sample = getattr(pt.random, dist_name)(size=shape)
+            initial = pt.switch(deterministic, pt.ones(shape, dtype) * dist_map, sample)
             return initial
 
     @node_property
@@ -1018,7 +1020,7 @@ class Group(WithMemoization):
         """
         node = self.to_flat_input(node)
         random = self.symbolic_random.astype(self.symbolic_initial.dtype)
-        random = at.specify_shape(random, self.symbolic_initial.type.shape)
+        random = pt.specify_shape(random, self.symbolic_initial.type.shape)
 
         def sample(post, *_):
             return pytensor.clone_replace(node, {self.input: post})
@@ -1056,7 +1058,7 @@ class Group(WithMemoization):
         dict with replacements for initial
         """
         initial = self._new_initial(s, d, more_replacements)
-        initial = at.specify_shape(initial, self.symbolic_initial.type.shape)
+        initial = pt.specify_shape(initial, self.symbolic_initial.type.shape)
         if more_replacements:
             initial = pytensor.clone_replace(initial, more_replacements)
         return {self.symbolic_initial: initial}
@@ -1065,11 +1067,13 @@ class Group(WithMemoization):
     def symbolic_normalizing_constant(self):
         """*Dev* - normalizing constant for `self.logq`, scales it to `minibatch_size` instead of `total_size`"""
         t = self.to_flat_input(
-            at.max(
+            pt.max(
                 [
-                    _get_scaling(self.model.rvs_to_total_sizes.get(v, None), v.shape, v.ndim)
+                    get_scaling(v.owner.inputs[1:], v.shape)
                     for v in self.group
+                    if isinstance(v.owner.op, MinibatchRandomVariable)
                 ]
+                + [1.0]  # To avoid empty max
             )
         )
         t = self.symbolic_single_sample(t)
@@ -1106,21 +1110,21 @@ class Group(WithMemoization):
         return f"{self.__class__.__name__}[{shp}]"
 
     @node_property
-    def std(self) -> at.TensorVariable:
+    def std(self) -> pt.TensorVariable:
         """Standard deviation of the latent variables as an unstructured 1-dimensional tensor variable"""
         raise NotImplementedError()
 
     @node_property
-    def cov(self) -> at.TensorVariable:
+    def cov(self) -> pt.TensorVariable:
         """Covariance between the latent variables as an unstructured 2-dimensional tensor variable"""
         raise NotImplementedError()
 
     @node_property
-    def mean(self) -> at.TensorVariable:
+    def mean(self) -> pt.TensorVariable:
         """Mean of the latent variables as an unstructured 1-dimensional tensor variable"""
         raise NotImplementedError()
 
-    def var_to_data(self, shared: at.TensorVariable) -> xarray.Dataset:
+    def var_to_data(self, shared: pt.TensorVariable) -> xarray.Dataset:
         """Takes a flat 1-dimensional tensor variable and maps it to an xarray data set based on the information in
         `self.ordering`.
         """
@@ -1232,29 +1236,26 @@ class Approximation(WithMemoization):
         """*Dev* - normalizing constant for `self.logq`, scales it to `minibatch_size` instead of `total_size`.
         Here the effect is controlled by `self.scale_cost_to_minibatch`
         """
-        t = at.max(
+        t = pt.max(
             self.collect("symbolic_normalizing_constant")
             + [
-                _get_scaling(
-                    self.model.rvs_to_total_sizes.get(obs, None),
-                    obs.shape,
-                    obs.ndim,
-                )
+                get_scaling(obs.owner.inputs[1:], obs.shape)
                 for obs in self.model.observed_RVs
+                if isinstance(obs.owner.op, MinibatchRandomVariable)
             ]
         )
-        t = at.switch(self._scale_cost_to_minibatch, t, at.constant(1, dtype=t.dtype))
+        t = pt.switch(self._scale_cost_to_minibatch, t, pt.constant(1, dtype=t.dtype))
         return pm.floatX(t)
 
     @node_property
     def symbolic_logq(self):
         """*Dev* - collects `symbolic_logq` for all groups"""
-        return at.add(*self.collect("symbolic_logq"))
+        return pt.add(*self.collect("symbolic_logq"))
 
     @node_property
     def logq(self):
         """*Dev* - collects `logQ` for all groups"""
-        return at.add(*self.collect("logq"))
+        return pt.add(*self.collect("logq"))
 
     @node_property
     def logq_norm(self):
@@ -1498,7 +1499,7 @@ class Approximation(WithMemoization):
 
     @node_property
     def sample_dict_fn(self):
-        s = at.iscalar()
+        s = pt.iscalar()
         names = [self.model.rvs_to_values[v].name for v in self.model.free_RVs]
         sampled = [self.rslice(name) for name in names]
         sampled = self.set_size_and_deterministic(sampled, s, 0)
@@ -1552,11 +1553,11 @@ class Approximation(WithMemoization):
         finally:
             trace.close()
 
-        trace = MultiTrace([trace])
+        multi_trace = MultiTrace([trace])
         if not return_inferencedata:
-            return trace
+            return multi_trace
         else:
-            return pm.to_inference_data(trace, model=self.model, **kwargs)
+            return pm.to_inference_data(multi_trace, model=self.model, **kwargs)
 
     @property
     def ndim(self):
@@ -1568,7 +1569,7 @@ class Approximation(WithMemoization):
 
     @node_property
     def symbolic_random(self):
-        return at.concatenate(self.collect("symbolic_random"), axis=-1)
+        return pt.concatenate(self.collect("symbolic_random"), axis=-1)
 
     def __str__(self):
         if len(self.groups) < 5:
@@ -1589,7 +1590,7 @@ class Approximation(WithMemoization):
     def joint_histogram(self):
         if not self.all_histograms:
             raise VariationalInferenceError("%s does not consist of all Empirical approximations")
-        return at.concatenate(self.collect("histogram"), axis=-1)
+        return pt.concatenate(self.collect("histogram"), axis=-1)
 
     @property
     def params(self):

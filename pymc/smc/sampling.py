@@ -193,7 +193,7 @@ def sample_smc(
 
     model = modelcontext(model)
 
-    _log = logging.getLogger("pymc")
+    _log = logging.getLogger(__name__)
     _log.info("Initializing SMC sampler...")
     _log.info(
         f"Sampling {chains} chain{'s' if chains > 1 else ''} "
@@ -347,7 +347,6 @@ def _sample_smc_int(
     stage = 0
     sample_stats = defaultdict(list)
     while smc.beta < 1:
-
         smc.update_beta_and_weights()
 
         if progressbar:

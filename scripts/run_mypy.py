@@ -29,8 +29,9 @@ pymc/distributions/multivariate.py
 pymc/distributions/timeseries.py
 pymc/distributions/truncated.py
 pymc/initial_point.py
+pymc/logprob/binary.py
 pymc/logprob/censoring.py
-pymc/logprob/joint_logprob.py
+pymc/logprob/basic.py
 pymc/logprob/mixture.py
 pymc/logprob/rewriting.py
 pymc/logprob/scan.py
@@ -42,7 +43,6 @@ pymc/model_graph.py
 pymc/printing.py
 pymc/pytensorf.py
 pymc/sampling/jax.py
-pymc/variational/approximations.py
 pymc/variational/opvi.py
 """
 
@@ -159,7 +159,7 @@ if __name__ == "__main__":
     args, _ = parser.parse_known_args()
 
     cp = subprocess.run(
-        ["mypy", "--show-error-codes", "--exclude", "pymc/tests", "pymc"],
+        ["mypy", "--show-error-codes", "--exclude", "tests", "pymc"],
         capture_output=True,
     )
     output = cp.stdout.decode()

@@ -23,7 +23,7 @@ from typing import Callable, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-from pytensor import tensor as at
+from pytensor import tensor as pt
 from pytensor.compile.builders import OpFromGraph
 from pytensor.graph import node_rewriter
 from pytensor.graph.basic import Node, Variable
@@ -32,7 +32,6 @@ from pytensor.graph.rewriting.basic import in2out
 from pytensor.graph.utils import MetaType
 from pytensor.tensor.basic import as_tensor_variable
 from pytensor.tensor.random.op import RandomVariable
-from pytensor.tensor.random.type import RandomType
 from pytensor.tensor.random.utils import normalize_size_param
 from pytensor.tensor.var import TensorVariable
 from typing_extensions import TypeAlias
@@ -45,26 +44,22 @@ from pymc.distributions.shape_utils import (
     convert_shape,
     convert_size,
     find_size,
+    rv_size_is_none,
     shape_from_dims,
 )
 from pymc.exceptions import BlockModelAccessError
-from pymc.logprob.abstract import (
-    MeasurableVariable,
-    _get_measurable_outputs,
-    _icdf,
-    _logcdf,
-    _logprob,
-)
+from pymc.logprob.abstract import MeasurableVariable, _icdf, _logcdf, _logprob
 from pymc.logprob.rewriting import logprob_rewrites_db
 from pymc.model import BlockModelAccess
 from pymc.printing import str_for_dist
-from pymc.pytensorf import collect_default_updates, convert_observed_data
+from pymc.pytensorf import collect_default_updates, convert_observed_data, floatX
 from pymc.util import UNSET, _add_future_warning_tag
-from pymc.vartypes import string_types
+from pymc.vartypes import continuous_types, string_types
 
 __all__ = [
     "CustomDist",
     "DensityDist",
+    "DiracDelta",
     "Distribution",
     "Continuous",
     "Discrete",
@@ -97,7 +92,6 @@ class DistributionMeta(ABCMeta):
     """
 
     def __new__(cls, name, bases, clsdict):
-
         # Forcefully deprecate old v3 `Distribution`s
         if "random" in clsdict:
 
@@ -400,20 +394,6 @@ class Distribution(metaclass=DistributionMeta):
 MeasurableVariable.register(SymbolicRandomVariable)
 
 
-@_get_measurable_outputs.register(SymbolicRandomVariable)
-def _get_measurable_outputs_symbolic_random_variable(op, node):
-    # This tells PyMC that any non RandomType outputs are measurable
-
-    # Assume that if there is one default_output, that's the only one that is measurable
-    # In the rare case this is not what one wants, a specialized _get_measuarable_outputs
-    # can dispatch for a subclassed Op
-    if op.default_output is not None:
-        return [node.default_output()]
-
-    # Otherwise assume that any outputs that are not of RandomType are measurable
-    return [out for out in node.outputs if not isinstance(out.type, RandomType)]
-
-
 @node_rewriter([SymbolicRandomVariable])
 def inline_symbolic_random_variable(fgraph, node):
     """
@@ -453,7 +433,6 @@ class Discrete(Distribution):
     """Base class for discrete distributions"""
 
     def __new__(cls, name, *args, **kwargs):
-
         if kwargs.get("transform", None):
             raise ValueError("Transformations for discrete distributions")
 
@@ -490,7 +469,6 @@ class _CustomDist(Distribution):
     def dist(
         cls,
         *dist_params,
-        class_name: str,
         logp: Optional[Callable] = None,
         logcdf: Optional[Callable] = None,
         random: Optional[Callable] = None,
@@ -498,9 +476,9 @@ class _CustomDist(Distribution):
         ndim_supp: int = 0,
         ndims_params: Optional[Sequence[int]] = None,
         dtype: str = "floatX",
+        class_name: str = "CustomDist",
         **kwargs,
     ):
-
         dist_params = [as_tensor_variable(param) for param in dist_params]
 
         # Assume scalar ndims_params
@@ -526,7 +504,6 @@ class _CustomDist(Distribution):
 
         return super().dist(
             dist_params,
-            class_name=class_name,
             logp=logp,
             logcdf=logcdf,
             random=random,
@@ -534,6 +511,7 @@ class _CustomDist(Distribution):
             ndim_supp=ndim_supp,
             ndims_params=ndims_params,
             dtype=dtype,
+            class_name=class_name,
             **kwargs,
         )
 
@@ -541,7 +519,6 @@ class _CustomDist(Distribution):
     def rv_op(
         cls,
         *dist_params,
-        class_name: str,
         logp: Optional[Callable],
         logcdf: Optional[Callable],
         random: Optional[Callable],
@@ -549,13 +526,14 @@ class _CustomDist(Distribution):
         ndim_supp: int,
         ndims_params: Optional[Sequence[int]],
         dtype: str,
+        class_name: str,
         **kwargs,
     ):
         rv_type = type(
-            f"CustomDistRV_{class_name}",
+            class_name,
             (CustomDistRV,),
             dict(
-                name=f"CustomDist_{class_name}",
+                name=class_name,
                 inplace=False,
                 ndim_supp=ndim_supp,
                 ndims_params=ndims_params,
@@ -596,7 +574,9 @@ class CustomSymbolicDistRV(SymbolicRandomVariable):
 
     def update(self, node: Node):
         op = node.op
-        inner_updates = collect_default_updates(op.inner_inputs, op.inner_outputs)
+        inner_updates = collect_default_updates(
+            inputs=op.inner_inputs, outputs=op.inner_outputs, must_be_shared=False
+        )
 
         # Map inner updates to outer inputs/outputs
         updates = {}
@@ -608,27 +588,21 @@ class CustomSymbolicDistRV(SymbolicRandomVariable):
 
 
 class _CustomSymbolicDist(Distribution):
-
     rv_type = CustomSymbolicDistRV
 
     @classmethod
     def dist(
         cls,
         *dist_params,
-        class_name: str,
         dist: Callable,
         logp: Optional[Callable] = None,
         logcdf: Optional[Callable] = None,
         moment: Optional[Callable] = None,
         ndim_supp: int = 0,
         dtype: str = "floatX",
+        class_name: str = "CustomSymbolicDist",
         **kwargs,
     ):
-        warnings.warn(
-            "CustomDist with dist function is still experimental. Expect bugs!",
-            UserWarning,
-        )
-
         dist_params = [as_tensor_variable(param) for param in dist_params]
 
         if logcdf is None:
@@ -657,13 +631,13 @@ class _CustomSymbolicDist(Distribution):
     def rv_op(
         cls,
         *dist_params,
-        class_name: str,
         dist: Callable,
         logp: Optional[Callable],
         logcdf: Optional[Callable],
         moment: Optional[Callable],
         size=None,
         ndim_supp: int,
+        class_name: str,
     ):
         size = normalize_size_param(size)
         dummy_size_param = size.type()
@@ -673,10 +647,10 @@ class _CustomSymbolicDist(Distribution):
         ):
             dummy_rv = dist(*dummy_dist_params, dummy_size_param)
         dummy_params = [dummy_size_param] + dummy_dist_params
-        dummy_updates_dict = collect_default_updates(dummy_params, (dummy_rv,))
+        dummy_updates_dict = collect_default_updates(inputs=dummy_params, outputs=(dummy_rv,))
 
         rv_type = type(
-            f"CustomSymbolicDistRV_{class_name}",
+            class_name,
             (CustomSymbolicDistRV,),
             # If logp is not provided, we try to infer it from the dist graph
             dict(
@@ -691,9 +665,11 @@ class _CustomSymbolicDist(Distribution):
             def custom_dist_logp(op, values, size, *params, **kwargs):
                 return logp(values[0], *params[: len(dist_params)])
 
-        @_logcdf.register(rv_type)
-        def custom_dist_logcdf(op, value, size, *params, **kwargs):
-            return logcdf(value, *params[: len(dist_params)])
+        if logcdf is not None:
+
+            @_logcdf.register(rv_type)
+            def custom_dist_logcdf(op, value, size, *params, **kwargs):
+                return logcdf(value, *params[: len(dist_params)])
 
         @_moment.register(rv_type)
         def custom_dist_get_moment(op, rv, size, *params):
@@ -707,7 +683,7 @@ class _CustomSymbolicDist(Distribution):
                 shape = tuple(rv.shape)
                 old_size = shape[: len(shape) - node.op.ndim_supp]
                 new_size = tuple(new_size) + tuple(old_size)
-            new_size = at.as_tensor(new_size, ndim=1, dtype="int64")
+            new_size = pt.as_tensor(new_size, ndim=1, dtype="int64")
 
             old_size, *old_dist_params = node.inputs[: len(dist_params) + 1]
 
@@ -716,7 +692,7 @@ class _CustomSymbolicDist(Distribution):
             dummy_dist_params = [dist_param.type() for dist_param in old_dist_params]
             dummy_rv = dist(*dummy_dist_params, dummy_size_param)
             dummy_params = [dummy_size_param] + dummy_dist_params
-            dummy_updates_dict = collect_default_updates(dummy_params, (dummy_rv,))
+            dummy_updates_dict = collect_default_updates(inputs=dummy_params, outputs=(dummy_rv,))
             new_rv_op = rv_type(
                 inputs=dummy_params,
                 outputs=[*dummy_updates_dict.values(), dummy_rv],
@@ -760,15 +736,6 @@ class CustomDist:
     dist_params : Tuple
         A sequence of the distribution's parameter. These will be converted into
         Pytensor tensor variables internally.
-    class_name : str
-        Name for the class which will wrap the CustomDist methods. When not specified,
-        it will be given the name of the model variable.
-
-        .. warning:: New CustomDists created with the same class_name will override the
-            methods dispatched onto the previous classes. If using CustomDists with
-            different methods across separate models, be sure to use distinct
-            class_names.
-
     dist: Optional[Callable]
         A callable that returns a PyTensor graph built from simpler PyMC distributions
         which represents the distribution. This can be used by PyMC to take random draws
@@ -833,6 +800,9 @@ class CustomDist:
         The dtype of the distribution. All draws and observations passed into the
         distribution will be cast onto this dtype. This is not needed if an PyTensor
         dist function is provided, which should already return the right dtype!
+    class_name : str
+        Name for the class which will wrap the CustomDist methods. When not specified,
+        it will be given the name of the model variable.
     kwargs :
         Extra keyword arguments are passed to the parent's class ``__new__`` method.
 
@@ -981,10 +951,10 @@ class CustomDist:
         dist_params = cls.parse_dist_params(dist_params)
         cls.check_valid_dist_random(dist, random, dist_params)
         if dist is not None:
+            kwargs.setdefault("class_name", f"CustomSymbolicDist_{name}")
             return _CustomSymbolicDist(
                 name,
                 *dist_params,
-                class_name=name,
                 dist=dist,
                 logp=logp,
                 logcdf=logcdf,
@@ -993,10 +963,10 @@ class CustomDist:
                 **kwargs,
             )
         else:
+            kwargs.setdefault("class_name", f"CustomDist_{name}")
             return _CustomDist(
                 name,
                 *dist_params,
-                class_name=name,
                 random=random,
                 logp=logp,
                 logcdf=logcdf,
@@ -1006,13 +976,11 @@ class CustomDist:
                 dtype=dtype,
                 **kwargs,
             )
-        return super().__new__(cls, name, *args, **kwargs)
 
     @classmethod
     def dist(
         cls,
         *dist_params,
-        class_name: str,
         dist: Optional[Callable] = None,
         random: Optional[Callable] = None,
         logp: Optional[Callable] = None,
@@ -1028,7 +996,6 @@ class CustomDist:
         if dist is not None:
             return _CustomSymbolicDist.dist(
                 *dist_params,
-                class_name=class_name,
                 dist=dist,
                 logp=logp,
                 logcdf=logcdf,
@@ -1039,7 +1006,6 @@ class CustomDist:
         else:
             return _CustomDist.dist(
                 *dist_params,
-                class_name=class_name,
                 random=random,
                 logp=logp,
                 logcdf=logcdf,
@@ -1111,12 +1077,73 @@ def default_not_implemented(rv_name, method_name):
 
 def default_moment(rv, size, *rv_inputs, rv_name=None, has_fallback=False, ndim_supp=0):
     if ndim_supp == 0:
-        return at.zeros(size, dtype=rv.dtype)
+        return pt.zeros(size, dtype=rv.dtype)
     elif has_fallback:
-        return at.zeros_like(rv)
+        return pt.zeros_like(rv)
     else:
         raise TypeError(
             "Cannot safely infer the size of a multivariate random variable's moment. "
             f"Please provide a moment function when instantiating the {rv_name} "
             "random variable."
+        )
+
+
+class DiracDeltaRV(RandomVariable):
+    name = "diracdelta"
+    ndim_supp = 0
+    ndims_params = [0]
+    _print_name = ("DiracDelta", "\\operatorname{DiracDelta}")
+
+    def make_node(self, rng, size, dtype, c):
+        c = pt.as_tensor_variable(c)
+        return super().make_node(rng, size, c.dtype, c)
+
+    @classmethod
+    def rng_fn(cls, rng, c, size=None):
+        if size is None:
+            return c.copy()
+        return np.full(size, c)
+
+
+diracdelta = DiracDeltaRV()
+
+
+class DiracDelta(Discrete):
+    r"""
+    DiracDelta log-likelihood.
+
+    Parameters
+    ----------
+    c : tensor_like of float or int
+        Dirac Delta parameter. The dtype of `c` determines the dtype of the distribution.
+        This can affect which sampler is assigned to DiracDelta variables, or variables
+        that use DiracDelta, such as Mixtures.
+    """
+
+    rv_op = diracdelta
+
+    @classmethod
+    def dist(cls, c, *args, **kwargs):
+        c = pt.as_tensor_variable(c)
+        if c.dtype in continuous_types:
+            c = floatX(c)
+        return super().dist([c], **kwargs)
+
+    def moment(rv, size, c):
+        if not rv_size_is_none(size):
+            c = pt.full(size, c)
+        return c
+
+    def logp(value, c):
+        return pt.switch(
+            pt.eq(value, c),
+            pt.zeros_like(value),
+            -np.inf,
+        )
+
+    def logcdf(value, c):
+        return pt.switch(
+            pt.lt(value, c),
+            -np.inf,
+            0,
         )

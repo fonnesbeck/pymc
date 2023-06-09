@@ -34,14 +34,20 @@
 #   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 #   SOFTWARE.
 
-from pymc.logprob.abstract import logprob  # isort: split
-
-from pymc.logprob.joint_logprob import factorized_joint_logprob, joint_logprob
+from pymc.logprob.basic import (
+    conditional_logp,
+    icdf,
+    logcdf,
+    logp,
+    transformed_conditional_logp,
+)
 
 # isort: off
 # Add rewrites to the DBs
+import pymc.logprob.binary
 import pymc.logprob.censoring
 import pymc.logprob.cumsum
+import pymc.logprob.checks
 import pymc.logprob.mixture
 import pymc.logprob.scan
 import pymc.logprob.tensor
@@ -49,4 +55,8 @@ import pymc.logprob.transforms
 
 # isort: on
 
-__all__ = ()
+__all__ = (
+    "logp",
+    "logcdf",
+    "icdf",
+)

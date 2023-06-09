@@ -6,19 +6,15 @@ Discrete
 .. autosummary::
    :toctree: generated
 
-   Binomial
-   BetaBinomial
    Bernoulli
-   DiscreteWeibull
-   Poisson
-   NegativeBinomial
-   DiracDelta
-   ZeroInflatedPoisson
-   ZeroInflatedBinomial
-   ZeroInflatedNegativeBinomial
+   BetaBinomial
+   Binomial
+   Categorical
    DiscreteUniform
+   DiscreteWeibull
    Geometric
    HyperGeometric
-   Categorical
+   NegativeBinomial
    OrderedLogistic
    OrderedProbit
+   Poisson

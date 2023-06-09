@@ -28,7 +28,7 @@ The "hacker" in the title  means learn-as-you-code. This hands-on introduction t
 :::
 
 :::{grid-item-card} Bayesian Analysis with Python
-:img-top: https://raw.githubusercontent.com/aloctavodia/BAP/master/Cover.png
+:img-top: https://aloctavodia.github.io/img/BAP.jpg
 
 By Osvaldo Martin
 
@@ -50,7 +50,7 @@ Principled introduction to Bayesian data analysis, with practical exercises. The
 
 [Book website](https://sites.google.com/site/doingbayesiandataanalysis/home)
 
-[PyMC 3.x port of the second edition's code](https://github.com/JWarmenhoven/DBDA-python)
+[PyMC port of the second edition's code](https://github.com/cluhmann/DBDA-python)
 
 :::
 
@@ -80,7 +80,7 @@ Focused on using Bayesian statistics in cognitive modeling.
 :::
 
 :::{grid-item-card} Bayesian Data Analysis
-:img-top: http://www.stat.columbia.edu/~gelman/book/bda_cover.png
+:img-top: https://www.stat.columbia.edu/~gelman/book/bda_cover.png
 
 By Andrew Gelman, John Carlin, Hal Stern, David Dunson, Aki Vehtari, and Donald Rubin
 

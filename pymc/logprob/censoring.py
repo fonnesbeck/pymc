@@ -37,7 +37,7 @@
 from typing import List, Optional
 
 import numpy as np
-import pytensor.tensor as at
+import pytensor.tensor as pt
 
 from pytensor.graph.basic import Node
 from pytensor.graph.fg import FunctionGraph
@@ -47,14 +47,8 @@ from pytensor.scalar.basic import clip as scalar_clip
 from pytensor.tensor.math import ceil, clip, floor, round_half_to_even
 from pytensor.tensor.var import TensorConstant
 
-from pymc.logprob.abstract import (
-    MeasurableElemwise,
-    MeasurableVariable,
-    _logcdf,
-    _logprob,
-    assign_custom_measurable_outputs,
-)
-from pymc.logprob.rewriting import measurable_ir_rewrites_db
+from pymc.logprob.abstract import MeasurableElemwise, _logcdf, _logprob
+from pymc.logprob.rewriting import PreserveRVMappings, measurable_ir_rewrites_db
 from pymc.logprob.utils import CheckParameterValue
 
 
@@ -71,36 +65,22 @@ measurable_clip = MeasurableClip(scalar_clip)
 def find_measurable_clips(fgraph: FunctionGraph, node: Node) -> Optional[List[MeasurableClip]]:
     # TODO: Canonicalize x[x>ub] = ub -> clip(x, x, ub)
 
-    rv_map_feature = getattr(fgraph, "preserve_rv_mappings", None)
+    rv_map_feature: Optional[PreserveRVMappings] = getattr(fgraph, "preserve_rv_mappings", None)
     if rv_map_feature is None:
         return None  # pragma: no cover
 
-    if isinstance(node.op, MeasurableClip):
-        return None  # pragma: no cover
-
-    clipped_var = node.outputs[0]
-    base_var, lower_bound, upper_bound = node.inputs
-
-    if not (
-        base_var.owner
-        and isinstance(base_var.owner.op, MeasurableVariable)
-        and base_var not in rv_map_feature.rv_values
-    ):
+    if not rv_map_feature.request_measurable(node.inputs):
         return None
+
+    base_var, lower_bound, upper_bound = node.inputs
 
     # Replace bounds by `+-inf` if `y = clip(x, x, ?)` or `y=clip(x, ?, x)`
     # This is used in `clip_logprob` to generate a more succinct logprob graph
     # for one-sided clipped random variables
-    lower_bound = lower_bound if (lower_bound is not base_var) else at.constant(-np.inf)
-    upper_bound = upper_bound if (upper_bound is not base_var) else at.constant(np.inf)
+    lower_bound = lower_bound if (lower_bound is not base_var) else pt.constant(-np.inf)
+    upper_bound = upper_bound if (upper_bound is not base_var) else pt.constant(np.inf)
 
-    # Make base_var unmeasurable
-    unmeasurable_base_var = assign_custom_measurable_outputs(base_var.owner)
-    clipped_rv_node = measurable_clip.make_node(unmeasurable_base_var, lower_bound, upper_bound)
-    clipped_rv = clipped_rv_node.outputs[0]
-
-    clipped_rv.name = clipped_var.name
-
+    clipped_rv = measurable_clip.make_node(base_var, lower_bound, upper_bound).outputs[0]
     return [clipped_rv]
 
 
@@ -143,28 +123,28 @@ def clip_logprob(op, values, base_rv, lower_bound, upper_bound, **kwargs):
     if not (isinstance(upper_bound, TensorConstant) and np.all(np.isinf(upper_bound.value))):
         is_upper_bounded = True
 
-        logccdf = at.log1mexp(logcdf)
+        logccdf = pt.log1mexp(logcdf)
         # For right clipped discrete RVs, we need to add an extra term
         # corresponding to the pmf at the upper bound
         if base_rv.dtype.startswith("int"):
-            logccdf = at.logaddexp(logccdf, logprob)
+            logccdf = pt.logaddexp(logccdf, logprob)
 
-        logprob = at.switch(
-            at.eq(value, upper_bound),
+        logprob = pt.switch(
+            pt.eq(value, upper_bound),
             logccdf,
-            at.switch(at.gt(value, upper_bound), -np.inf, logprob),
+            pt.switch(pt.gt(value, upper_bound), -np.inf, logprob),
         )
     if not (isinstance(lower_bound, TensorConstant) and np.all(np.isneginf(lower_bound.value))):
         is_lower_bounded = True
-        logprob = at.switch(
-            at.eq(value, lower_bound),
+        logprob = pt.switch(
+            pt.eq(value, lower_bound),
             logcdf,
-            at.switch(at.lt(value, lower_bound), -np.inf, logprob),
+            pt.switch(pt.lt(value, lower_bound), -np.inf, logprob),
         )
 
     if is_lower_bounded and is_upper_bounded:
         logprob = CheckParameterValue("lower_bound <= upper_bound")(
-            logprob, at.all(at.le(lower_bound, upper_bound))
+            logprob, pt.all(pt.le(lower_bound, upper_bound))
         )
 
     return logprob
@@ -178,32 +158,17 @@ class MeasurableRound(MeasurableElemwise):
 
 @node_rewriter(tracks=[ceil, floor, round_half_to_even])
 def find_measurable_roundings(fgraph: FunctionGraph, node: Node) -> Optional[List[MeasurableRound]]:
-
-    rv_map_feature = getattr(fgraph, "preserve_rv_mappings", None)
+    rv_map_feature: Optional[PreserveRVMappings] = getattr(fgraph, "preserve_rv_mappings", None)
     if rv_map_feature is None:
         return None  # pragma: no cover
 
-    if isinstance(node.op, MeasurableRound):
-        return None  # pragma: no cover
-
-    (rounded_var,) = node.outputs
-    (base_var,) = node.inputs
-
-    if not (
-        base_var.owner
-        and isinstance(base_var.owner.op, MeasurableVariable)
-        and base_var not in rv_map_feature.rv_values
-        # Rounding only makes sense for continuous variables
-        and base_var.dtype.startswith("float")
-    ):
+    if not rv_map_feature.request_measurable(node.inputs):
         return None
 
-    # Make base_var unmeasurable
-    unmeasurable_base_var = assign_custom_measurable_outputs(base_var.owner)
-
+    [base_var] = node.inputs
     rounded_op = MeasurableRound(node.op.scalar_op)
-    rounded_rv = rounded_op.make_node(unmeasurable_base_var).default_output()
-    rounded_rv.name = rounded_var.name
+    rounded_rv = rounded_op.make_node(base_var).default_output()
+    rounded_rv.name = node.outputs[0].name
     return [rounded_rv]
 
 
@@ -244,15 +209,15 @@ def round_logprob(op, values, base_rv, **kwargs):
     (value,) = values
 
     if isinstance(op.scalar_op, RoundHalfToEven):
-        value = at.round(value)
+        value = pt.round(value)
         value_upper = value + 0.5
         value_lower = value - 0.5
     elif isinstance(op.scalar_op, Floor):
-        value = at.floor(value)
+        value = pt.floor(value)
         value_upper = value + 1.0
         value_lower = value
     elif isinstance(op.scalar_op, Ceil):
-        value = at.ceil(value)
+        value = pt.ceil(value)
         value_upper = value
         value_lower = value - 1.0
     else:

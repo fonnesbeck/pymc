@@ -36,17 +36,12 @@
 
 from typing import List, Optional
 
-import pytensor.tensor as at
+import pytensor.tensor as pt
 
 from pytensor.graph.rewriting.basic import node_rewriter
 from pytensor.tensor.extra_ops import CumOp
 
-from pymc.logprob.abstract import (
-    MeasurableVariable,
-    _logprob,
-    assign_custom_measurable_outputs,
-    logprob,
-)
+from pymc.logprob.abstract import MeasurableVariable, _logprob, _logprob_helper
 from pymc.logprob.rewriting import PreserveRVMappings, measurable_ir_rewrites_db
 
 
@@ -62,13 +57,13 @@ def logprob_cumsum(op, values, base_rv, **kwargs):
     """Compute the log-likelihood graph for a `Cumsum`."""
     (value,) = values
 
-    value_diff = at.diff(value, axis=op.axis)
-    value_diff = at.concatenate(
+    value_diff = pt.diff(value, axis=op.axis)
+    value_diff = pt.concatenate(
         (
             # Take first element of axis and add a broadcastable dimension so
             # that it can be concatenated with the rest of value_diff
-            at.shape_padaxis(
-                at.take(value, 0, axis=op.axis),
+            pt.shape_padaxis(
+                pt.take(value, 0, axis=op.axis),
                 axis=op.axis,
             ),
             value_diff,
@@ -76,7 +71,7 @@ def logprob_cumsum(op, values, base_rv, **kwargs):
         axis=op.axis,
     )
 
-    cumsum_logp = logprob(base_rv, value_diff)
+    cumsum_logp = _logprob_helper(base_rv, value_diff)
 
     return cumsum_logp
 
@@ -96,25 +91,17 @@ def find_measurable_cumsums(fgraph, node) -> Optional[List[MeasurableCumsum]]:
     if rv_map_feature is None:
         return None  # pragma: no cover
 
-    rv = node.outputs[0]
-
     base_rv = node.inputs[0]
-    if not (
-        base_rv.owner
-        and isinstance(base_rv.owner.op, MeasurableVariable)
-        and base_rv not in rv_map_feature.rv_values
-    ):
-        return None  # pragma: no cover
 
     # Check that cumsum does not mix dimensions
     if base_rv.ndim > 1 and node.op.axis is None:
         return None
 
+    if not rv_map_feature.request_measurable(node.inputs):
+        return None
+
     new_op = MeasurableCumsum(axis=node.op.axis or 0, mode="add")
-    # Make base_var unmeasurable
-    unmeasurable_base_rv = assign_custom_measurable_outputs(base_rv.owner)
-    new_rv = new_op.make_node(unmeasurable_base_rv).default_output()
-    new_rv.name = rv.name
+    new_rv = new_op.make_node(base_rv).default_output()
 
     return [new_rv]
 

@@ -7,7 +7,7 @@ pip install -r requirements-dev.txt
 ```
 
 The PyMC test suite uses `pytest` as the testing framework.
-If you are unfamiliar with `pytest`, check out [this short video series](https://calmcode.io/pytest/).
+If you are unfamiliar with `pytest`, check out [this short video series](https://calmcode.io/pytest/introduction.html).
 
 With the optional dependencies installed, you can start running tests.
 Below are some example of how you might want to run certain parts of the test suite.
@@ -19,7 +19,7 @@ Therefore, we recommend to run just specific tests that target the parts of the 
 
 To run all tests from a single file:
 ```bash
-pytest -v pymc/tests/test_model.py
+pytest -v tests/test_model.py
 ```
 
 ```{tip}
@@ -31,7 +31,7 @@ By using the `-k` flag, you can filter for test cases that match a certain patte
 For example, the following command runs all test cases from `test_model.py` that have "coord" in their name:
 
 ```bash
-pytest -v pymc/tests/test_model.py -k coord
+pytest -v tests/test_model.py -k coord
 ```
 
 
@@ -40,7 +40,7 @@ Note that because you are not running the entire test suite, the coverage will b
 But you can still watch for specific line numbers of the code that you're working on.
 
 ```bash
-pytest -v --cov=pymc --cov-report term-missing pymc/tests/<name of test>.py
+pytest -v --cov=pymc --cov-report term-missing tests/<name of test>.py
 ```
 
 When you are reasonably confident about the changes you made, you can push the changes and open a pull request.

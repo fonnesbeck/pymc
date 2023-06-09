@@ -14,7 +14,7 @@
 import warnings
 
 import numpy as np
-import pytensor.tensor as at
+import pytensor.tensor as pt
 
 from pytensor.tensor import TensorConstant
 from pytensor.tensor.random.basic import (
@@ -36,6 +36,8 @@ import pymc as pm
 from pymc.distributions.dist_math import (
     betaln,
     binomln,
+    check_icdf_parameters,
+    check_icdf_value,
     check_parameters,
     factln,
     log_diff_normal_cdf,
@@ -44,12 +46,10 @@ from pymc.distributions.dist_math import (
     normal_lcdf,
 )
 from pymc.distributions.distribution import Discrete
-from pymc.distributions.logprob import logp
-from pymc.distributions.mixture import Mixture
 from pymc.distributions.shape_utils import rv_size_is_none
+from pymc.logprob.basic import logcdf, logp
 from pymc.math import sigmoid
 from pymc.pytensorf import floatX, intX
-from pymc.vartypes import continuous_types
 
 __all__ = [
     "Binomial",
@@ -58,11 +58,6 @@ __all__ = [
     "DiscreteWeibull",
     "Poisson",
     "NegativeBinomial",
-    "DiracDelta",
-    "Constant",
-    "ZeroInflatedPoisson",
-    "ZeroInflatedBinomial",
-    "ZeroInflatedNegativeBinomial",
     "DiscreteUniform",
     "Geometric",
     "HyperGeometric",
@@ -127,21 +122,21 @@ class Binomial(Discrete):
             raise ValueError("Incompatible parametrization. Must specify either p or logit_p.")
 
         if logit_p is not None:
-            p = at.sigmoid(logit_p)
+            p = pt.sigmoid(logit_p)
 
-        n = at.as_tensor_variable(intX(n))
-        p = at.as_tensor_variable(floatX(p))
+        n = pt.as_tensor_variable(intX(n))
+        p = pt.as_tensor_variable(floatX(p))
         return super().dist([n, p], **kwargs)
 
     def moment(rv, size, n, p):
-        mean = at.round(n * p)
+        mean = pt.round(n * p)
         if not rv_size_is_none(size):
-            mean = at.full(size, mean)
+            mean = pt.full(size, mean)
         return mean
 
     def logp(value, n, p):
-        res = at.switch(
-            at.or_(at.lt(value, 0), at.gt(value, n)),
+        res = pt.switch(
+            pt.or_(pt.lt(value, 0), pt.gt(value, n)),
             -np.inf,
             binomln(n, value) + logpow(p, value) + logpow(1 - p, n - value),
         )
@@ -155,14 +150,14 @@ class Binomial(Discrete):
         )
 
     def logcdf(value, n, p):
-        value = at.floor(value)
+        value = pt.floor(value)
 
-        res = at.switch(
-            at.lt(value, 0),
+        res = pt.switch(
+            pt.lt(value, 0),
             -np.inf,
-            at.switch(
-                at.lt(value, n),
-                at.log(at.betainc(n - value, value + 1, 1 - p)),
+            pt.switch(
+                pt.lt(value, n),
+                pt.log(pt.betainc(n - value, value + 1, 1 - p)),
                 0,
             ),
         )
@@ -220,7 +215,7 @@ class BetaBinomial(Discrete):
     ========  =================================================================
     Support   :math:`x \in \{0, 1, \ldots, n\}`
     Mean      :math:`n \dfrac{\alpha}{\alpha + \beta}`
-    Variance  :math:`n \dfrac{\alpha \beta}{(\alpha+\beta)^2 (\alpha+\beta+1)}`
+    Variance  :math:`\dfrac{n \alpha \beta (\alpha+\beta+n)}{(\alpha+\beta)^2 (\alpha+\beta+1)}`
     ========  =================================================================
 
     Parameters
@@ -237,20 +232,20 @@ class BetaBinomial(Discrete):
 
     @classmethod
     def dist(cls, alpha, beta, n, *args, **kwargs):
-        alpha = at.as_tensor_variable(floatX(alpha))
-        beta = at.as_tensor_variable(floatX(beta))
-        n = at.as_tensor_variable(intX(n))
+        alpha = pt.as_tensor_variable(floatX(alpha))
+        beta = pt.as_tensor_variable(floatX(beta))
+        n = pt.as_tensor_variable(intX(n))
         return super().dist([n, alpha, beta], **kwargs)
 
     def moment(rv, size, n, alpha, beta):
-        mean = at.round((n * alpha) / (alpha + beta))
+        mean = pt.round((n * alpha) / (alpha + beta))
         if not rv_size_is_none(size):
-            mean = at.full(size, mean)
+            mean = pt.full(size, mean)
         return mean
 
     def logp(value, n, alpha, beta):
-        res = at.switch(
-            at.or_(at.lt(value, 0), at.gt(value, n)),
+        res = pt.switch(
+            pt.or_(pt.lt(value, 0), pt.gt(value, n)),
             -np.inf,
             binomln(n, value) + betaln(value + alpha, n - value + beta) - betaln(alpha, beta),
         )
@@ -269,16 +264,16 @@ class BetaBinomial(Discrete):
                 f"BetaBinomial.logcdf expects a scalar value but received a {np.ndim(value)}-dimensional object."
             )
 
-        safe_lower = at.switch(at.lt(value, 0), value, 0)
-        res = at.switch(
-            at.lt(value, 0),
+        safe_lower = pt.switch(pt.lt(value, 0), value, 0)
+        res = pt.switch(
+            pt.lt(value, 0),
             -np.inf,
-            at.switch(
-                at.lt(value, n),
-                at.logsumexp(
+            pt.switch(
+                pt.lt(value, n),
+                pt.logsumexp(
                     logp(
                         BetaBinomial.dist(alpha=alpha, beta=beta, n=n),
-                        at.arange(safe_lower, value + 1),
+                        pt.arange(safe_lower, value + 1),
                     ),
                     keepdims=False,
                 ),
@@ -349,21 +344,21 @@ class Bernoulli(Discrete):
             raise ValueError("Incompatible parametrization. Must specify either p or logit_p.")
 
         if logit_p is not None:
-            p = at.sigmoid(logit_p)
+            p = pt.sigmoid(logit_p)
 
-        p = at.as_tensor_variable(floatX(p))
+        p = pt.as_tensor_variable(floatX(p))
         return super().dist([p], **kwargs)
 
     def moment(rv, size, p):
         if not rv_size_is_none(size):
-            p = at.full(size, p)
-        return at.switch(p < 0.5, 0, 1)
+            p = pt.full(size, p)
+        return pt.switch(p < 0.5, 0, 1)
 
     def logp(value, p):
-        res = at.switch(
-            at.or_(at.lt(value, 0), at.gt(value, 1)),
+        res = pt.switch(
+            pt.or_(pt.lt(value, 0), pt.gt(value, 1)),
             -np.inf,
-            at.switch(value, at.log(p), at.log1p(-p)),
+            pt.switch(value, pt.log(p), pt.log1p(-p)),
         )
 
         return check_parameters(
@@ -374,12 +369,12 @@ class Bernoulli(Discrete):
         )
 
     def logcdf(value, p):
-        res = at.switch(
-            at.lt(value, 0),
+        res = pt.switch(
+            pt.lt(value, 0),
             -np.inf,
-            at.switch(
-                at.lt(value, 1),
-                at.log1p(-p),
+            pt.switch(
+                pt.lt(value, 1),
+                pt.log1p(-p),
                 0,
             ),
         )
@@ -459,21 +454,21 @@ class DiscreteWeibull(Discrete):
 
     @classmethod
     def dist(cls, q, beta, *args, **kwargs):
-        q = at.as_tensor_variable(floatX(q))
-        beta = at.as_tensor_variable(floatX(beta))
+        q = pt.as_tensor_variable(floatX(q))
+        beta = pt.as_tensor_variable(floatX(beta))
         return super().dist([q, beta], **kwargs)
 
     def moment(rv, size, q, beta):
-        median = at.power(at.log(0.5) / at.log(q), 1 / beta) - 1
+        median = pt.power(pt.log(0.5) / pt.log(q), 1 / beta) - 1
         if not rv_size_is_none(size):
-            median = at.full(size, median)
+            median = pt.full(size, median)
         return median
 
     def logp(value, q, beta):
-        res = at.switch(
-            at.lt(value, 0),
+        res = pt.switch(
+            pt.lt(value, 0),
             -np.inf,
-            at.log(at.power(q, at.power(value, beta)) - at.power(q, at.power(value + 1, beta))),
+            pt.log(pt.power(q, pt.power(value, beta)) - pt.power(q, pt.power(value + 1, beta))),
         )
 
         return check_parameters(
@@ -485,10 +480,10 @@ class DiscreteWeibull(Discrete):
         )
 
     def logcdf(value, q, beta):
-        res = at.switch(
-            at.lt(value, 0),
+        res = pt.switch(
+            pt.lt(value, 0),
             -np.inf,
-            at.log1p(-at.power(q, at.power(value + 1, beta))),
+            pt.log1p(-pt.power(q, pt.power(value + 1, beta))),
         )
         return check_parameters(
             res,
@@ -548,24 +543,24 @@ class Poisson(Discrete):
 
     @classmethod
     def dist(cls, mu, *args, **kwargs):
-        mu = at.as_tensor_variable(floatX(mu))
+        mu = pt.as_tensor_variable(floatX(mu))
         return super().dist([mu], *args, **kwargs)
 
     def moment(rv, size, mu):
-        mu = at.floor(mu)
+        mu = pt.floor(mu)
         if not rv_size_is_none(size):
-            mu = at.full(size, mu)
+            mu = pt.full(size, mu)
         return mu
 
     def logp(value, mu):
-        res = at.switch(
-            at.lt(value, 0),
+        res = pt.switch(
+            pt.lt(value, 0),
             -np.inf,
             logpow(mu, value) - factln(value) - mu,
         )
         # Return zero when mu and value are both zero
-        res = at.switch(
-            at.eq(mu, 0) * at.eq(value, 0),
+        res = pt.switch(
+            pt.eq(mu, 0) * pt.eq(value, 0),
             0,
             res,
         )
@@ -576,15 +571,15 @@ class Poisson(Discrete):
         )
 
     def logcdf(value, mu):
-        value = at.floor(value)
+        value = pt.floor(value)
         # Avoid C-assertion when the gammaincc function is called with invalid values (#4340)
-        safe_mu = at.switch(at.lt(mu, 0), 0, mu)
-        safe_value = at.switch(at.lt(value, 0), 0, value)
+        safe_mu = pt.switch(pt.lt(mu, 0), 0, mu)
+        safe_value = pt.switch(pt.lt(value, 0), 0, value)
 
-        res = at.switch(
-            at.lt(value, 0),
+        res = pt.switch(
+            pt.lt(value, 0),
             -np.inf,
-            at.log(at.gammaincc(safe_value + 1, safe_mu)),
+            pt.log(pt.gammaincc(safe_value + 1, safe_mu)),
         )
 
         return check_parameters(
@@ -671,8 +666,8 @@ class NegativeBinomial(Discrete):
     @classmethod
     def dist(cls, mu=None, alpha=None, p=None, n=None, *args, **kwargs):
         n, p = cls.get_n_p(mu=mu, alpha=alpha, p=p, n=n)
-        n = at.as_tensor_variable(floatX(n))
-        p = at.as_tensor_variable(floatX(p))
+        n = pt.as_tensor_variable(floatX(n))
+        p = pt.as_tensor_variable(floatX(p))
         return super().dist([n, p], *args, **kwargs)
 
     @classmethod
@@ -696,17 +691,17 @@ class NegativeBinomial(Discrete):
         return n, p
 
     def moment(rv, size, n, p):
-        mu = at.floor(n * (1 - p) / p)
+        mu = pt.floor(n * (1 - p) / p)
         if not rv_size_is_none(size):
-            mu = at.full(size, mu)
+            mu = pt.full(size, mu)
         return mu
 
     def logp(value, n, p):
         alpha = n
         mu = alpha * (1 - p) / p
 
-        res = at.switch(
-            at.lt(value, 0),
+        res = pt.switch(
+            pt.lt(value, 0),
             -np.inf,
             (
                 binomln(value + alpha - 1, value)
@@ -723,13 +718,13 @@ class NegativeBinomial(Discrete):
         )
 
         # Return Poisson when alpha gets very large.
-        return at.switch(at.gt(alpha, 1e10), logp(Poisson.dist(mu=mu), value), negbinom)
+        return pt.switch(pt.gt(alpha, 1e10), logp(Poisson.dist(mu=mu), value), negbinom)
 
     def logcdf(value, n, p):
-        res = at.switch(
-            at.lt(value, 0),
+        res = pt.switch(
+            pt.lt(value, 0),
             -np.inf,
-            at.log(at.betainc(n, at.floor(value) + 1, p)),
+            pt.log(pt.betainc(n, pt.floor(value) + 1, p)),
         )
         return check_parameters(
             res,
@@ -783,20 +778,20 @@ class Geometric(Discrete):
 
     @classmethod
     def dist(cls, p, *args, **kwargs):
-        p = at.as_tensor_variable(floatX(p))
+        p = pt.as_tensor_variable(floatX(p))
         return super().dist([p], *args, **kwargs)
 
     def moment(rv, size, p):
-        mean = at.round(1.0 / p)
+        mean = pt.round(1.0 / p)
         if not rv_size_is_none(size):
-            mean = at.full(size, mean)
+            mean = pt.full(size, mean)
         return mean
 
     def logp(value, p):
-        res = at.switch(
-            at.lt(value, 1),
+        res = pt.switch(
+            pt.lt(value, 1),
             -np.inf,
-            at.log(p) + logpow(1 - p, value - 1),
+            pt.log(p) + logpow(1 - p, value - 1),
         )
 
         return check_parameters(
@@ -807,10 +802,10 @@ class Geometric(Discrete):
         )
 
     def logcdf(value, p):
-        res = at.switch(
-            at.lt(value, 0),
+        res = pt.switch(
+            pt.lt(value, 0),
             -np.inf,
-            at.log1mexp(at.log1p(-p) * value),
+            pt.log1mexp(pt.log1p(-p) * value),
         )
         return check_parameters(
             res,
@@ -820,7 +815,18 @@ class Geometric(Discrete):
         )
 
     def icdf(value, p):
-        return at.ceil(at.log1p(-value) / at.log1p(-p)).astype("int64")
+        res = pt.ceil(pt.log1p(-value) / pt.log1p(-p)).astype("int64")
+        res_1m = pt.maximum(res - 1, 0)
+        dist = pm.Geometric.dist(p=p)
+        value_1m = pt.exp(logcdf(dist, res_1m))
+        res = pt.switch(value_1m >= value, res_1m, res)
+        res = check_icdf_value(res, value)
+        return check_icdf_parameters(
+            res,
+            0 <= p,
+            p <= 1,
+            msg="0 <= p <= 1",
+        )
 
 
 class HyperGeometric(Discrete):
@@ -847,9 +853,7 @@ class HyperGeometric(Discrete):
         k = 10
         for n in [20, 25]:
             pmf = st.hypergeom.pmf(x, N, k, n)
-            plt.plot(x, pmf, '-o', label='n = {}'.format(n))
-        plt.plot(x, pmf, '-o', label='N = {}'.format(N))
-        plt.plot(x, pmf, '-o', label='k = {}'.format(k))
+            plt.plot(x, pmf, '-o', label='N = {}, k = {}, n = {}'.format(N, k, n))
         plt.xlabel('x', fontsize=12)
         plt.ylabel('f(x)', fontsize=12)
         plt.legend(loc=1)
@@ -875,16 +879,16 @@ class HyperGeometric(Discrete):
 
     @classmethod
     def dist(cls, N, k, n, *args, **kwargs):
-        good = at.as_tensor_variable(intX(k))
-        bad = at.as_tensor_variable(intX(N - k))
-        n = at.as_tensor_variable(intX(n))
+        good = pt.as_tensor_variable(intX(k))
+        bad = pt.as_tensor_variable(intX(N - k))
+        n = pt.as_tensor_variable(intX(n))
         return super().dist([good, bad, n], *args, **kwargs)
 
     def moment(rv, size, good, bad, n):
         N, k = good + bad, good
-        mode = at.floor((n + 1) * (k + 1) / (N + 2))
+        mode = pt.floor((n + 1) * (k + 1) / (N + 2))
         if not rv_size_is_none(size):
-            mode = at.full(size, mode)
+            mode = pt.full(size, mode)
         return mode
 
     def logp(value, good, bad, n):
@@ -898,14 +902,14 @@ class HyperGeometric(Discrete):
             - betaln(tot + 1, 1)
         )
         # value in [max(0, n - N + k), min(k, n)]
-        lower = at.switch(at.gt(n - tot + good, 0), n - tot + good, 0)
-        upper = at.switch(at.lt(good, n), good, n)
+        lower = pt.switch(pt.gt(n - tot + good, 0), n - tot + good, 0)
+        upper = pt.switch(pt.lt(good, n), good, n)
 
-        res = at.switch(
-            at.lt(value, lower),
+        res = pt.switch(
+            pt.lt(value, lower),
             -np.inf,
-            at.switch(
-                at.le(value, upper),
+            pt.switch(
+                pt.le(value, upper),
                 result,
                 -np.inf,
             ),
@@ -926,15 +930,15 @@ class HyperGeometric(Discrete):
 
         N = good + bad
         # TODO: Use lower upper in locgdf for smarter logsumexp?
-        safe_lower = at.switch(at.lt(value, 0), value, 0)
+        safe_lower = pt.switch(pt.lt(value, 0), value, 0)
 
-        res = at.switch(
-            at.lt(value, 0),
+        res = pt.switch(
+            pt.lt(value, 0),
             -np.inf,
-            at.switch(
-                at.lt(value, n),
-                at.logsumexp(
-                    HyperGeometric.logp(at.arange(safe_lower, value + 1), good, bad, n),
+            pt.switch(
+                pt.lt(value, n),
+                pt.logsumexp(
+                    HyperGeometric.logp(pt.arange(safe_lower, value + 1), good, bad, n),
                     keepdims=False,
                 ),
                 0,
@@ -1012,21 +1016,21 @@ class DiscreteUniform(Discrete):
 
     @classmethod
     def dist(cls, lower, upper, *args, **kwargs):
-        lower = intX(at.floor(lower))
-        upper = intX(at.floor(upper))
+        lower = intX(pt.floor(lower))
+        upper = intX(pt.floor(upper))
         return super().dist([lower, upper], **kwargs)
 
     def moment(rv, size, lower, upper):
-        mode = at.maximum(at.floor((upper + lower) / 2.0), lower)
+        mode = pt.maximum(pt.floor((upper + lower) / 2.0), lower)
         if not rv_size_is_none(size):
-            mode = at.full(size, mode)
+            mode = pt.full(size, mode)
         return mode
 
     def logp(value, lower, upper):
-        res = at.switch(
-            at.or_(at.lt(value, lower), at.gt(value, upper)),
+        res = pt.switch(
+            pt.or_(pt.lt(value, lower), pt.gt(value, upper)),
             -np.inf,
-            at.fill(value, -at.log(upper - lower + 1)),
+            pt.fill(value, -pt.log(upper - lower + 1)),
         )
         return check_parameters(
             res,
@@ -1035,17 +1039,31 @@ class DiscreteUniform(Discrete):
         )
 
     def logcdf(value, lower, upper):
-        res = at.switch(
-            at.le(value, lower),
+        res = pt.switch(
+            pt.le(value, lower),
             -np.inf,
-            at.switch(
-                at.lt(value, upper),
-                at.log(at.minimum(at.floor(value), upper) - lower + 1) - at.log(upper - lower + 1),
+            pt.switch(
+                pt.lt(value, upper),
+                pt.log(pt.minimum(pt.floor(value), upper) - lower + 1) - pt.log(upper - lower + 1),
                 0,
             ),
         )
 
         return check_parameters(
+            res,
+            lower <= upper,
+            msg="lower <= upper",
+        )
+
+    def icdf(value, lower, upper):
+        res = pt.ceil(value * (upper - lower + 1)).astype("int64") + lower - 1
+        res_1m = pt.maximum(res - 1, lower)
+        dist = pm.DiscreteUniform.dist(lower=lower, upper=upper)
+        value_1m = pt.exp(logcdf(dist, res_1m))
+        res = pt.switch(value_1m >= value, res_1m, res)
+
+        res = check_icdf_value(res, value)
+        return check_icdf_parameters(
             res,
             lower <= upper,
             msg="lower <= upper",
@@ -1101,7 +1119,7 @@ class Categorical(Discrete):
         if logit_p is not None:
             p = pm.math.softmax(logit_p, axis=-1)
 
-        p = at.as_tensor_variable(p)
+        p = pt.as_tensor_variable(p)
         if isinstance(p, TensorConstant):
             p_ = np.asarray(p.data)
             if np.any(p_ < 0):
@@ -1114,38 +1132,38 @@ class Categorical(Discrete):
                     "You can rescale them directly to get rid of this warning.",
                     UserWarning,
                 )
-                p_ = p_ / at.sum(p_, axis=-1, keepdims=True)
-                p = at.as_tensor_variable(p_)
+                p_ = p_ / pt.sum(p_, axis=-1, keepdims=True)
+                p = pt.as_tensor_variable(p_)
         return super().dist([p], **kwargs)
 
     def moment(rv, size, p):
-        mode = at.argmax(p, axis=-1)
+        mode = pt.argmax(p, axis=-1)
         if not rv_size_is_none(size):
-            mode = at.full(size, mode)
+            mode = pt.full(size, mode)
         return mode
 
     def logp(value, p):
-        k = at.shape(p)[-1]
+        k = pt.shape(p)[-1]
         p_ = p
-        value_clip = at.clip(value, 0, k - 1)
+        value_clip = pt.clip(value, 0, k - 1)
 
         if p.ndim > 1:
             if p.ndim > value_clip.ndim:
-                value_clip = at.shape_padleft(value_clip, p_.ndim - value_clip.ndim)
+                value_clip = pt.shape_padleft(value_clip, p_.ndim - value_clip.ndim)
             elif p.ndim < value_clip.ndim:
-                p = at.shape_padleft(p, value_clip.ndim - p_.ndim)
+                p = pt.shape_padleft(p, value_clip.ndim - p_.ndim)
             pattern = (p.ndim - 1,) + tuple(range(p.ndim - 1))
-            a = at.log(
-                at.take_along_axis(
+            a = pt.log(
+                pt.take_along_axis(
                     p.dimshuffle(pattern),
                     value_clip,
                 )
             )
         else:
-            a = at.log(p[value_clip])
+            a = pt.log(p[value_clip])
 
-        res = at.switch(
-            at.or_(at.lt(value, 0), at.gt(value, k - 1)),
+        res = pt.switch(
+            pt.or_(pt.lt(value, 0), pt.gt(value, k - 1)),
             -np.inf,
             a,
         )
@@ -1154,332 +1172,8 @@ class Categorical(Discrete):
             res,
             0 <= p_,
             p_ <= 1,
-            at.isclose(at.sum(p, axis=-1), 1),
+            pt.isclose(pt.sum(p, axis=-1), 1),
             msg="0 <= p <=1, sum(p) = 1",
-        )
-
-
-class DiracDeltaRV(RandomVariable):
-    name = "diracdelta"
-    ndim_supp = 0
-    ndims_params = [0]
-    _print_name = ("DiracDelta", "\\operatorname{DiracDelta}")
-
-    def make_node(self, rng, size, dtype, c):
-        c = at.as_tensor_variable(c)
-        return super().make_node(rng, size, c.dtype, c)
-
-    @classmethod
-    def rng_fn(cls, rng, c, size=None):
-        if size is None:
-            return c.copy()
-        return np.full(size, c)
-
-
-diracdelta = DiracDeltaRV()
-
-
-class DiracDelta(Discrete):
-    r"""
-    DiracDelta log-likelihood.
-
-    Parameters
-    ----------
-    c : tensor_like of float or int
-        Dirac Delta parameter. The dtype of `c` determines the dtype of the distribution.
-        This can affect which sampler is assigned to DiracDelta variables, or variables
-        that use DiracDelta, such as Mixtures.
-    """
-
-    rv_op = diracdelta
-
-    @classmethod
-    def dist(cls, c, *args, **kwargs):
-        c = at.as_tensor_variable(c)
-        if c.dtype in continuous_types:
-            c = floatX(c)
-        return super().dist([c], **kwargs)
-
-    def moment(rv, size, c):
-        if not rv_size_is_none(size):
-            c = at.full(size, c)
-        return c
-
-    def logp(value, c):
-        return at.switch(
-            at.eq(value, c),
-            at.zeros_like(value),
-            -np.inf,
-        )
-
-    def logcdf(value, c):
-        return at.switch(
-            at.lt(value, c),
-            -np.inf,
-            0,
-        )
-
-
-class Constant:
-    def __new__(cls, *args, **kwargs):
-        warnings.warn(
-            "pm.Constant has been deprecated. Use pm.DiracDelta instead.",
-            FutureWarning,
-        )
-        return DiracDelta(*args, **kwargs)
-
-    @classmethod
-    def dist(cls, *args, **kwargs):
-        warnings.warn(
-            "pm.Constant has been deprecated. Use pm.DiracDelta instead.",
-            FutureWarning,
-        )
-        return DiracDelta.dist(*args, **kwargs)
-
-
-def _zero_inflated_mixture(*, name, nonzero_p, nonzero_dist, **kwargs):
-    """Helper function to create a zero-inflated mixture
-
-    If name is `None`, this function returns an unregistered variable
-    """
-    nonzero_p = at.as_tensor_variable(floatX(nonzero_p))
-    weights = at.stack([1 - nonzero_p, nonzero_p], axis=-1)
-    comp_dists = [
-        DiracDelta.dist(0),
-        nonzero_dist,
-    ]
-    if name is not None:
-        return Mixture(name, weights, comp_dists, **kwargs)
-    else:
-        return Mixture.dist(weights, comp_dists, **kwargs)
-
-
-class ZeroInflatedPoisson:
-    R"""
-    Zero-inflated Poisson log-likelihood.
-
-    Often used to model the number of events occurring in a fixed period
-    of time when the times at which events occur are independent.
-    The pmf of this distribution is
-
-    .. math::
-
-        f(x \mid \psi, \mu) = \left\{ \begin{array}{l}
-            (1-\psi) + \psi e^{-\mu}, \text{if } x = 0 \\
-            \psi \frac{e^{-\mu}\mu^x}{x!}, \text{if } x=1,2,3,\ldots
-            \end{array} \right.
-
-    .. plot::
-        :context: close-figs
-
-        import matplotlib.pyplot as plt
-        import numpy as np
-        import scipy.stats as st
-        import arviz as az
-        plt.style.use('arviz-darkgrid')
-        x = np.arange(0, 22)
-        psis = [0.7, 0.4]
-        mus = [8, 4]
-        for psi, mu in zip(psis, mus):
-            pmf = st.poisson.pmf(x, mu)
-            pmf[0] = (1 - psi) + pmf[0]
-            pmf[1:] =  psi * pmf[1:]
-            pmf /= pmf.sum()
-            plt.plot(x, pmf, '-o', label='$\\psi$ = {}, $\\mu$ = {}'.format(psi, mu))
-        plt.xlabel('x', fontsize=12)
-        plt.ylabel('f(x)', fontsize=12)
-        plt.legend(loc=1)
-        plt.show()
-
-    ========  ==========================
-    Support   :math:`x \in \mathbb{N}_0`
-    Mean      :math:`\psi\mu`
-    Variance  :math:`\mu + \frac{1-\psi}{\psi}\mu^2`
-    ========  ==========================
-
-    Parameters
-    ----------
-    psi : tensor_like of float
-        Expected proportion of Poisson variates (0 < psi < 1)
-    mu : tensor_like of float
-        Expected number of occurrences during the given interval
-        (mu >= 0).
-    """
-
-    def __new__(cls, name, psi, mu, **kwargs):
-        return _zero_inflated_mixture(
-            name=name, nonzero_p=psi, nonzero_dist=Poisson.dist(mu=mu), **kwargs
-        )
-
-    @classmethod
-    def dist(cls, psi, mu, **kwargs):
-        return _zero_inflated_mixture(
-            name=None, nonzero_p=psi, nonzero_dist=Poisson.dist(mu=mu), **kwargs
-        )
-
-
-class ZeroInflatedBinomial:
-    R"""
-    Zero-inflated Binomial log-likelihood.
-
-    The pmf of this distribution is
-
-    .. math::
-
-        f(x \mid \psi, n, p) = \left\{ \begin{array}{l}
-            (1-\psi) + \psi (1-p)^{n}, \text{if } x = 0 \\
-            \psi {n \choose x} p^x (1-p)^{n-x}, \text{if } x=1,2,3,\ldots,n
-            \end{array} \right.
-
-    .. plot::
-        :context: close-figs
-
-        import matplotlib.pyplot as plt
-        import numpy as np
-        import scipy.stats as st
-        import arviz as az
-        plt.style.use('arviz-darkgrid')
-        x = np.arange(0, 25)
-        ns = [10, 20]
-        ps = [0.5, 0.7]
-        psis = [0.7, 0.4]
-        for n, p, psi in zip(ns, ps, psis):
-            pmf = st.binom.pmf(x, n, p)
-            pmf[0] = (1 - psi) + pmf[0]
-            pmf[1:] =  psi * pmf[1:]
-            pmf /= pmf.sum()
-            plt.plot(x, pmf, '-o', label='n = {}, p = {}, $\\psi$ = {}'.format(n, p, psi))
-        plt.xlabel('x', fontsize=12)
-        plt.ylabel('f(x)', fontsize=12)
-        plt.legend(loc=1)
-        plt.show()
-
-    ========  ==========================
-    Support   :math:`x \in \mathbb{N}_0`
-    Mean      :math:`\psi n p`
-    Variance  :math:`(1-\psi) n p [1 - p(1 - \psi n)].`
-    ========  ==========================
-
-    Parameters
-    ----------
-    psi : tensor_like of float
-        Expected proportion of Binomial variates (0 < psi < 1)
-    n : tensor_like of int
-        Number of Bernoulli trials (n >= 0).
-    p : tensor_like of float
-        Probability of success in each trial (0 < p < 1).
-
-    """
-
-    def __new__(cls, name, psi, n, p, **kwargs):
-        return _zero_inflated_mixture(
-            name=name, nonzero_p=psi, nonzero_dist=Binomial.dist(n=n, p=p), **kwargs
-        )
-
-    @classmethod
-    def dist(cls, psi, n, p, **kwargs):
-        return _zero_inflated_mixture(
-            name=None, nonzero_p=psi, nonzero_dist=Binomial.dist(n=n, p=p), **kwargs
-        )
-
-
-class ZeroInflatedNegativeBinomial:
-    R"""
-    Zero-Inflated Negative binomial log-likelihood.
-
-    The Zero-inflated version of the Negative Binomial (NB).
-    The NB distribution describes a Poisson random variable
-    whose rate parameter is gamma distributed.
-    The pmf of this distribution is
-
-    .. math::
-
-       f(x \mid \psi, \mu, \alpha) = \left\{
-         \begin{array}{l}
-           (1-\psi) + \psi \left (
-             \frac{\alpha}{\alpha+\mu}
-           \right) ^\alpha, \text{if } x = 0 \\
-           \psi \frac{\Gamma(x+\alpha)}{x! \Gamma(\alpha)} \left (
-             \frac{\alpha}{\mu+\alpha}
-           \right)^\alpha \left(
-             \frac{\mu}{\mu+\alpha}
-           \right)^x, \text{if } x=1,2,3,\ldots
-         \end{array}
-       \right.
-
-    .. plot::
-        :context: close-figs
-
-        import matplotlib.pyplot as plt
-        import numpy as np
-        import scipy.stats as st
-        from scipy import special
-        import arviz as az
-        plt.style.use('arviz-darkgrid')
-
-        def ZeroInfNegBinom(a, m, psi, x):
-            pmf = special.binom(x + a - 1, x) * (a / (m + a))**a * (m / (m + a))**x
-            pmf[0] = (1 - psi) + pmf[0]
-            pmf[1:] =  psi * pmf[1:]
-            pmf /= pmf.sum()
-            return pmf
-
-        x = np.arange(0, 25)
-        alphas = [2, 4]
-        mus = [2, 8]
-        psis = [0.7, 0.7]
-        for a, m, psi in zip(alphas, mus, psis):
-            pmf = ZeroInfNegBinom(a, m, psi, x)
-            plt.plot(x, pmf, '-o', label=r'$\alpha$ = {}, $\mu$ = {}, $\psi$ = {}'.format(a, m, psi))
-        plt.xlabel('x', fontsize=12)
-        plt.ylabel('f(x)', fontsize=12)
-        plt.legend(loc=1)
-        plt.show()
-
-    ========  ==========================
-    Support   :math:`x \in \mathbb{N}_0`
-    Mean      :math:`\psi\mu`
-    Var       :math:`\psi\mu +  \left (1 + \frac{\mu}{\alpha} + \frac{1-\psi}{\mu} \right)`
-    ========  ==========================
-
-    The zero inflated negative binomial distribution can be parametrized
-    either in terms of mu or p, and either in terms of alpha or n.
-    The link between the parametrizations is given by
-
-    .. math::
-
-        \mu &= \frac{n(1-p)}{p} \\
-        \alpha &= n
-
-    Parameters
-    ----------
-    psi : tensor_like of float
-        Expected proportion of NegativeBinomial variates (0 < psi < 1)
-    mu : tensor_like of float
-        Poission distribution parameter (mu > 0).
-    alpha : tensor_like of float
-        Gamma distribution parameter (alpha > 0).
-    p : tensor_like of float
-        Alternative probability of success in each trial (0 < p < 1).
-    n : tensor_like of float
-        Alternative number of target success trials (n > 0)
-    """
-
-    def __new__(cls, name, psi, mu=None, alpha=None, p=None, n=None, **kwargs):
-        return _zero_inflated_mixture(
-            name=name,
-            nonzero_p=psi,
-            nonzero_dist=NegativeBinomial.dist(mu=mu, alpha=alpha, p=p, n=n),
-            **kwargs,
-        )
-
-    @classmethod
-    def dist(cls, psi, mu=None, alpha=None, p=None, n=None, **kwargs):
-        return _zero_inflated_mixture(
-            name=None,
-            nonzero_p=psi,
-            nonzero_dist=NegativeBinomial.dist(mu=mu, alpha=alpha, p=p, n=n),
-            **kwargs,
         )
 
 
@@ -1492,15 +1186,15 @@ class _OrderedLogistic(Categorical):
 
     @classmethod
     def dist(cls, eta, cutpoints, *args, **kwargs):
-        eta = at.as_tensor_variable(floatX(eta))
-        cutpoints = at.as_tensor_variable(cutpoints)
+        eta = pt.as_tensor_variable(floatX(eta))
+        cutpoints = pt.as_tensor_variable(cutpoints)
 
-        pa = sigmoid(cutpoints - at.shape_padright(eta))
-        p_cum = at.concatenate(
+        pa = sigmoid(cutpoints - pt.shape_padright(eta))
+        p_cum = pt.concatenate(
             [
-                at.zeros_like(at.shape_padright(pa[..., 0])),
+                pt.zeros_like(pt.shape_padright(pa[..., 0])),
                 pa,
-                at.ones_like(at.shape_padright(pa[..., 0])),
+                pt.ones_like(pt.shape_padright(pa[..., 0])),
             ],
             axis=-1,
         )
@@ -1565,7 +1259,7 @@ class OrderedLogistic:
         # Ordered logistic regression
         with pm.Model() as model:
             cutpoints = pm.Normal("cutpoints", mu=[-1,1], sigma=10, shape=2,
-                                  transform=pm.distributions.transforms.ordered)
+                                  transform=pm.distributions.transforms.univariate_ordered)
             y_ = pm.OrderedLogistic("y", cutpoints=cutpoints, eta=x, observed=y)
             idata = pm.sample()
 
@@ -1598,22 +1292,22 @@ class _OrderedProbit(Categorical):
 
     @classmethod
     def dist(cls, eta, cutpoints, sigma=1, *args, **kwargs):
-        eta = at.as_tensor_variable(floatX(eta))
-        cutpoints = at.as_tensor_variable(cutpoints)
+        eta = pt.as_tensor_variable(floatX(eta))
+        cutpoints = pt.as_tensor_variable(cutpoints)
 
-        probits = at.shape_padright(eta) - cutpoints
-        _log_p = at.concatenate(
+        probits = pt.shape_padright(eta) - cutpoints
+        _log_p = pt.concatenate(
             [
-                at.shape_padright(normal_lccdf(0, sigma, probits[..., 0])),
+                pt.shape_padright(normal_lccdf(0, sigma, probits[..., 0])),
                 log_diff_normal_cdf(
-                    0, at.shape_padright(sigma), probits[..., :-1], probits[..., 1:]
+                    0, pt.shape_padright(sigma), probits[..., :-1], probits[..., 1:]
                 ),
-                at.shape_padright(normal_lcdf(0, sigma, probits[..., -1])),
+                pt.shape_padright(normal_lcdf(0, sigma, probits[..., -1])),
             ],
             axis=-1,
         )
-        _log_p = at.as_tensor_variable(floatX(_log_p))
-        p = at.exp(_log_p)
+        _log_p = pt.as_tensor_variable(floatX(_log_p))
+        p = pt.exp(_log_p)
 
         return super().dist(p, *args, **kwargs)
 
