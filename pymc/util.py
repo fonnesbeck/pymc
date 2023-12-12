@@ -15,7 +15,7 @@
 import functools
 import warnings
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union, cast
+from typing import Any, Dict, List, NewType, Optional, Sequence, Tuple, Union, cast
 
 import arviz
 import cloudpickle
@@ -26,6 +26,10 @@ from cachetools import LRUCache, cachedmethod
 from pytensor import Variable
 from pytensor.compile import SharedVariable
 from pytensor.graph.utils import ValidatingScratchpad
+
+from pymc.exceptions import BlockModelAccessError
+
+VarName = NewType("VarName", str)
 
 
 class _UnsetType:
@@ -205,9 +209,9 @@ def get_default_varnames(var_iterator, include_transformed):
         return [var for var in var_iterator if not is_transformed_name(get_var_name(var))]
 
 
-def get_var_name(var) -> str:
+def get_var_name(var) -> VarName:
     """Get an appropriate, plain variable name for a variable."""
-    return str(getattr(var, "name", var))
+    return VarName(str(getattr(var, "name", var)))
 
 
 def get_transformed(z):
@@ -250,7 +254,7 @@ def dataset_to_point_list(
     }
     points = [
         {vn: stacked_dict[vn][i, ...] for vn in var_names}
-        for i in range(np.product([len(coords) for coords in stacked_dims.values()]))
+        for i in range(np.prod([len(coords) for coords in stacked_dims.values()]))
     ]
     # use the list of points
     return cast(List[Dict[str, np.ndarray]], points), stacked_dims
@@ -367,7 +371,7 @@ def check_dist_not_registered(dist, model=None):
 
     try:
         model = modelcontext(None)
-    except TypeError:
+    except (TypeError, BlockModelAccessError):
         pass
     else:
         if dist in model.basic_RVs:

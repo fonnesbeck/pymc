@@ -18,6 +18,7 @@ from unittest import mock
 
 import arviz as az
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pytensor
 import pytensor.tensor as pt
@@ -29,6 +30,7 @@ from pytensor.graph import graph_inputs
 
 import pymc as pm
 
+from pymc.distributions.multivariate import PosDefMatrix
 from pymc.sampling.jax import (
     _get_batched_jittered_initial_points,
     _get_log_likelihood,
@@ -49,6 +51,25 @@ def test_old_import_route():
     assert set(new_sj.__all__) <= set(dir(old_sj))
 
 
+def test_jax_PosDefMatrix():
+    x = pt.tensor(name="x", shape=(2, 2), dtype="float32")
+    matrix_pos_def = PosDefMatrix()
+    x_is_pos_def = matrix_pos_def(x)
+    f = pytensor.function(inputs=[x], outputs=[x_is_pos_def], mode="JAX")
+
+    test_cases = [
+        (jnp.eye(2), True),
+        (jnp.zeros(shape=(2, 2)), False),
+        (jnp.array([[1, -1.5], [0, 1.2]], dtype="float32"), True),
+        (-1 * jnp.array([[1, -1.5], [0, 1.2]], dtype="float32"), False),
+        (jnp.array([[1, -1.5], [0, -1.2]], dtype="float32"), False),
+    ]
+
+    for input, expected in test_cases:
+        actual = f(input)[0]
+        assert jnp.array_equal(a1=actual, a2=expected)
+
+
 @pytest.mark.parametrize(
     "sampler",
     [
@@ -66,8 +87,8 @@ def test_old_import_route():
         ),
     ],
 )
-@pytest.mark.parametrize("postprocessing_chunks", [None, 10])
-def test_transform_samples(sampler, postprocessing_backend, chains, postprocessing_chunks):
+@pytest.mark.parametrize("postprocessing_vectorize", ["scan", "vmap"])
+def test_transform_samples(sampler, postprocessing_backend, chains, postprocessing_vectorize):
     pytensor.config.on_opt_error = "raise"
     np.random.seed(13244)
 
@@ -83,7 +104,7 @@ def test_transform_samples(sampler, postprocessing_backend, chains, postprocessi
             random_seed=1322,
             keep_untransformed=True,
             postprocessing_backend=postprocessing_backend,
-            postprocessing_chunks=postprocessing_chunks,
+            postprocessing_vectorize=postprocessing_vectorize,
         )
 
     log_vals = trace.posterior["sigma_log__"].values
@@ -134,7 +155,7 @@ def test_deterministic_samples(sampler):
 
 def test_get_jaxified_graph():
     # Check that jaxifying a graph does not emit the Supervisor Warning. This test can
-    # be removed once https://github.com/pytensor-devs/pytensor/issues/637 is sorted.
+    # be removed once https://github.com/aesara-devs/aesara/issues/637 is sorted.
     x = pt.scalar("x")
     y = pt.exp(x)
     with warnings.catch_warnings():
@@ -412,8 +433,8 @@ def test_idata_contains_stats(sampler_name: str):
 
     stats = idata.get("sample_stats")
     assert stats is not None
-    n_chains = stats.dims["chain"]
-    n_draws = stats.dims["draw"]
+    n_chains = stats.sizes["chain"]
+    n_draws = stats.sizes["draw"]
 
     # Stats vars expected for both samplers
     expected_stat_vars = {

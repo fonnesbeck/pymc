@@ -12,6 +12,7 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 import logging
+import platform
 import warnings
 
 import numpy as np
@@ -26,15 +27,15 @@ import pymc as pm
 from pymc.backends.base import MultiTrace
 from pymc.pytensorf import floatX
 from pymc.smc.kernels import IMH, systematic_resampling
-from pymc.testing import SeededTest
 from tests.helpers import assert_random_state_equal
 
+_IS_WINDOWS = platform.system() == "Windows"
 
-class TestSMC(SeededTest):
+
+class TestSMC:
     """Tests for the default SMC kernel"""
 
     def setup_class(self):
-        super().setup_class()
         self.samples = 1000
         n = 4
         mu1 = np.ones(n) * 0.5
@@ -77,7 +78,9 @@ class TestSMC(SeededTest):
     def test_sample(self):
         initial_rng_state = np.random.get_state()
         with self.SMC_test:
-            mtrace = pm.sample_smc(draws=self.samples, return_inferencedata=False)
+            mtrace = pm.sample_smc(
+                draws=self.samples, return_inferencedata=False, progressbar=not _IS_WINDOWS
+            )
 
         # Verify sampling was done with a non-global random generator
         assert_random_state_equal(initial_rng_state, np.random.get_state())
@@ -107,7 +110,7 @@ class TestSMC(SeededTest):
 
     def test_unobserved_bernoulli(self):
         n = 10
-        rng = self.get_random_state()
+        rng = np.random.RandomState(20160911)
         z_true = np.zeros(n, dtype=int)
         z_true[int(n / 2) :] = 1
         y = st.norm(np.array([-1, 1])[z_true], 0.25).rvs(random_state=rng)
@@ -144,7 +147,9 @@ class TestSMC(SeededTest):
             with pm.Model() as model:
                 a = pm.Beta("a", alpha, beta)
                 y = pm.Bernoulli("y", a, observed=data)
-                trace = pm.sample_smc(2000, chains=2, return_inferencedata=False)
+                trace = pm.sample_smc(
+                    2000, chains=2, return_inferencedata=False, progressbar=not _IS_WINDOWS
+                )
             # log_marginal_likelihood is found in the last value of each chain
             lml = np.mean([chain[-1] for chain in trace.report.log_marginal_likelihood])
             marginals.append(lml)
@@ -205,13 +210,20 @@ class TestSMC(SeededTest):
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", ".*number of samples.*", UserWarning)
                 warnings.filterwarnings("ignore", "More chains .* than draws .*", UserWarning)
-                idata = pm.sample_smc(chains=chains, draws=draws)
-                mt = pm.sample_smc(chains=chains, draws=draws, return_inferencedata=False)
+                idata = pm.sample_smc(
+                    chains=chains, draws=draws, progressbar=not (chains > 1 and _IS_WINDOWS)
+                )
+                mt = pm.sample_smc(
+                    chains=chains,
+                    draws=draws,
+                    return_inferencedata=False,
+                    progressbar=not (chains > 1 and _IS_WINDOWS),
+                )
 
         assert isinstance(idata, InferenceData)
         assert "sample_stats" in idata
-        assert idata.posterior.dims["chain"] == chains
-        assert idata.posterior.dims["draw"] == draws
+        assert idata.posterior.sizes["chain"] == chains
+        assert idata.posterior.sizes["draw"] == draws
 
         assert isinstance(mt, MultiTrace)
         assert mt.nchains == chains
@@ -220,7 +232,7 @@ class TestSMC(SeededTest):
     def test_convergence_checks(self, caplog):
         with caplog.at_level(logging.INFO):
             with self.fast_model:
-                pm.sample_smc(draws=99)
+                pm.sample_smc(draws=99, progressbar=not _IS_WINDOWS)
         assert "The number of samples is too small" in caplog.text
 
     def test_deprecated_parallel_arg(self):
@@ -258,16 +270,16 @@ class TestSMC(SeededTest):
                 pm.sample_smc(draws=10, chains=1, save_log_pseudolikelihood=True)
 
 
-class TestMHKernel(SeededTest):
+class TestMHKernel:
     def test_normal_model(self):
-        data = st.norm(10, 0.5).rvs(1000, random_state=self.get_random_state())
+        data = st.norm(10, 0.5).rvs(1000, random_state=np.random.RandomState(20160911))
 
         initial_rng_state = np.random.get_state()
         with pm.Model() as m:
             mu = pm.Normal("mu", 0, 3)
             sigma = pm.HalfNormal("sigma", 1)
             y = pm.Normal("y", mu, sigma, observed=data)
-            idata = pm.sample_smc(draws=2000, kernel=pm.smc.MH)
+            idata = pm.sample_smc(draws=2000, kernel=pm.smc.MH, progressbar=not _IS_WINDOWS)
         assert_random_state_equal(initial_rng_state, np.random.get_state())
 
         post = idata.posterior.stack(sample=("chain", "draw"))

@@ -32,12 +32,21 @@ from pytensor.graph.op import Op
 from pytensor.tensor import (
     abs,
     and_,
+    arccos,
+    arccosh,
+    arcsin,
+    arcsinh,
+    arctan,
+    arctanh,
+    broadcast_to,
     ceil,
     clip,
     concatenate,
     constant,
     cos,
     cosh,
+    cumprod,
+    cumsum,
     dot,
     eq,
     erf,
@@ -47,6 +56,8 @@ from pytensor.tensor import (
     exp,
     flatten,
     floor,
+    full,
+    full_like,
     ge,
     gt,
     le,
@@ -55,9 +66,14 @@ from pytensor.tensor import (
     logaddexp,
     logsumexp,
     lt,
+    matmul,
+    max,
     maximum,
+    mean,
+    min,
     minimum,
     neq,
+    ones,
     ones_like,
     or_,
     prod,
@@ -73,15 +89,12 @@ from pytensor.tensor import (
     tan,
     tanh,
     where,
+    zeros,
     zeros_like,
 )
-
-try:
-    from pytensor.tensor.basic import extract_diag
-except ImportError:
-    from pytensor.tensor.nlinalg import extract_diag
-
-from pytensor.tensor.nlinalg import det, matrix_dot, matrix_inverse, trace
+from pytensor.tensor.linalg import solve_triangular
+from pytensor.tensor.nlinalg import matrix_inverse
+from pytensor.tensor.special import log_softmax, softmax
 from scipy.linalg import block_diag as scipy_block_diag
 
 from pymc.pytensorf import floatX, ix_, largest_common_dtype
@@ -91,12 +104,21 @@ from pymc.pytensorf import floatX, ix_, largest_common_dtype
 __all__ = [
     "abs",
     "and_",
+    "arccos",
+    "arccosh",
+    "arcsin",
+    "arcsinh",
+    "arctan",
+    "arctanh",
+    "broadcast_to",
     "ceil",
     "clip",
     "concatenate",
     "constant",
     "cos",
     "cosh",
+    "cumprod",
+    "cumsum",
     "dot",
     "eq",
     "erf",
@@ -104,6 +126,8 @@ __all__ = [
     "erfcinv",
     "erfinv",
     "exp",
+    "full",
+    "full_like",
     "flatten",
     "floor",
     "ge",
@@ -114,12 +138,18 @@ __all__ = [
     "logaddexp",
     "logsumexp",
     "lt",
+    "matmul",
+    "max",
     "maximum",
+    "mean",
+    "min",
     "minimum",
     "neq",
+    "ones",
     "ones_like",
     "or_",
     "prod",
+    "round",
     "sgn",
     "sigmoid",
     "sin",
@@ -132,6 +162,7 @@ __all__ = [
     "tan",
     "tanh",
     "where",
+    "zeros",
     "zeros_like",
     "kronecker",
     "cartesian",
@@ -229,8 +260,8 @@ def kron_matrix_op(krons, m, op):
 
 # Define kronecker functions that work on 1D and 2D arrays
 kron_dot = partial(kron_matrix_op, op=pt.dot)
-kron_solve_lower = partial(kron_matrix_op, op=pt.slinalg.SolveTriangular(lower=True))
-kron_solve_upper = partial(kron_matrix_op, op=pt.slinalg.SolveTriangular(lower=False))
+kron_solve_lower = partial(kron_matrix_op, op=partial(solve_triangular, lower=True))
+kron_solve_upper = partial(kron_matrix_op, op=partial(solve_triangular, lower=False))
 
 
 def flat_outer(a, b):
@@ -248,13 +279,18 @@ def kron_diag(*diags):
     return reduce(flat_outer, diags)
 
 
-def tround(*args, **kwargs):
+def round(*args, **kwargs):
     """
     Temporary function to silence round warning in PyTensor. Please remove
     when the warning disappears.
     """
     kwargs["mode"] = "half_to_even"
     return pt.round(*args, **kwargs)
+
+
+def tround(*args, **kwargs):
+    warnings.warn("tround is deprecated. Use round instead.")
+    return round(*args, **kwargs)
 
 
 def logdiffexp(a, b):
@@ -267,31 +303,7 @@ def logdiffexp_numpy(a, b):
     return a + log1mexp_numpy(b - a, negative_input=True)
 
 
-def invlogit(x, eps=None):
-    """The inverse of the logit function, 1 / (1 + exp(-x))."""
-    if eps is not None:
-        warnings.warn(
-            "pymc.math.invlogit no longer supports the ``eps`` argument and it will be ignored.",
-            FutureWarning,
-            stacklevel=2,
-        )
-    return pt.sigmoid(x)
-
-
-def softmax(x, axis=None):
-    # Ignore vector case UserWarning issued by PyTensor. This can be removed once PyTensor
-    # drops that warning
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        return pt.special.softmax(x, axis=axis)
-
-
-def log_softmax(x, axis=None):
-    # Ignore vector case UserWarning issued by PyTensor. This can be removed once PyTensor
-    # drops that warning
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        return pt.special.log_softmax(x, axis=axis)
+invlogit = sigmoid
 
 
 def logbern(log_p):
@@ -443,11 +455,17 @@ def expand_packed_triangular(n, packed, lower=True, diagonal_only=False):
     elif lower:
         out = pt.zeros((n, n), dtype=pytensor.config.floatX)
         idxs = np.tril_indices(n)
-        return pt.set_subtensor(out[idxs], packed)
+        # tag as lower triangular to enable pytensor rewrites
+        out = pt.set_subtensor(out[idxs], packed)
+        out.tag.lower_triangular = True
+        return out
     elif not lower:
         out = pt.zeros((n, n), dtype=pytensor.config.floatX)
         idxs = np.triu_indices(n)
-        return pt.set_subtensor(out[idxs], packed)
+        # tag as upper triangular to enable pytensor rewrites
+        out = pt.set_subtensor(out[idxs], packed)
+        out.tag.upper_triangular = True
+        return out
 
 
 class BatchedDiag(Op):

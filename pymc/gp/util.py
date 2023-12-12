@@ -18,25 +18,18 @@ import numpy as np
 import pytensor.tensor as pt
 
 from pytensor.compile import SharedVariable
-from pytensor.tensor.slinalg import (  # noqa: W0611; pylint: disable=unused-import
-    SolveTriangular,
-    cholesky,
-    solve,
-)
-from pytensor.tensor.var import TensorConstant
+from pytensor.graph import ancestors
+from pytensor.tensor.variable import TensorConstant
 from scipy.cluster.vq import kmeans
 
 # Avoid circular dependency when importing modelcontext
 from pymc.distributions.distribution import Distribution
 from pymc.model import modelcontext
-from pymc.pytensorf import compile_pymc, walk_model
+from pymc.pytensorf import compile_pymc
 
 _ = Distribution  # keep both pylint and black happy
 
 JITTER_DEFAULT = 1e-6
-
-solve_lower = SolveTriangular(lower=True)
-solve_upper = SolveTriangular(lower=False)
 
 
 def replace_with_values(vars_needed, replacements=None, model=None):
@@ -56,7 +49,7 @@ def replace_with_values(vars_needed, replacements=None, model=None):
     model = modelcontext(model)
 
     inputs, input_names = [], []
-    for rv in walk_model(vars_needed):
+    for rv in ancestors(vars_needed):
         if rv in model.named_vars.values() and not isinstance(rv, SharedVariable):
             inputs.append(rv)
             input_names.append(rv.name)

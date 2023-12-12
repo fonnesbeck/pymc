@@ -5,10 +5,12 @@ Multivariate
 .. currentmodule:: pymc
 .. autosummary::
    :toctree: generated
+   :template: distribution.rst
 
    CAR
    Dirichlet
    DirichletMultinomial
+   ICAR
    KroneckerNormal
    LKJCholeskyCov
    LKJCorr

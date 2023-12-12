@@ -20,7 +20,12 @@ import scipy
 from pytensor.tensor.random.basic import GeometricRV, NormalRV
 
 from pymc import Censored, Model, draw, find_MAP
-from pymc.distributions.continuous import Exponential, TruncatedNormalRV
+from pymc.distributions.continuous import (
+    Exponential,
+    Gamma,
+    TruncatedNormal,
+    TruncatedNormalRV,
+)
 from pymc.distributions.shape_utils import change_dist_size
 from pymc.distributions.transforms import _default_transform
 from pymc.distributions.truncated import Truncated, TruncatedRV, _truncated
@@ -101,11 +106,12 @@ def test_truncation_specialized_op(shape_info):
 
 @pytest.mark.parametrize("lower, upper", [(-1, np.inf), (-1, 1.5), (-np.inf, 1.5)])
 @pytest.mark.parametrize("op_type", ["icdf", "rejection"])
-def test_truncation_continuous_random(op_type, lower, upper):
+@pytest.mark.parametrize("scalar", [True, False])
+def test_truncation_continuous_random(op_type, lower, upper, scalar):
     loc = 0.15
     scale = 10
     normal_op = icdf_normal if op_type == "icdf" else rejection_normal
-    x = normal_op(loc, scale, name="x", size=100)
+    x = normal_op(loc, scale, name="x", size=() if scalar else (100,))
 
     xt = Truncated.dist(x, lower=lower, upper=upper)
     assert isinstance(xt.owner.op, TruncatedRV)
@@ -134,7 +140,7 @@ def test_truncation_continuous_random(op_type, lower, upper):
         assert np.unique(xt_draws).size == xt_draws.size
     else:
         with pytest.raises(TruncationError, match="^Truncation did not converge"):
-            draw(xt)
+            draw(xt, draws=100 if scalar else 1)
 
 
 @pytest.mark.parametrize("lower, upper", [(-1, np.inf), (-1, 1.5), (-np.inf, 1.5)])
@@ -392,3 +398,83 @@ def test_truncated_inference():
         map = find_MAP(progressbar=False)
 
     assert np.isclose(map["lam"], lam_true, atol=0.1)
+
+
+def test_truncated_gamma():
+    # Regression test for https://github.com/pymc-devs/pymc/issues/6931
+    alpha = 3.0
+    beta = 3.0
+    upper = 2.5
+    x = np.linspace(0.0, upper + 0.5, 100)
+
+    gamma_scipy = scipy.stats.gamma(a=alpha, scale=1.0 / beta)
+    logp_scipy = gamma_scipy.logpdf(x) - gamma_scipy.logcdf(upper)
+    logp_scipy[x > upper] = -np.inf
+
+    gamma_trunc_pymc = Truncated.dist(
+        Gamma.dist(alpha=alpha, beta=beta),
+        upper=upper,
+    )
+    logp_pymc = logp(gamma_trunc_pymc, x).eval()
+    np.testing.assert_allclose(
+        logp_pymc,
+        logp_scipy,
+    )
+
+    # Changing the size used to invert the beta Gamma parameter again
+    resized_gamma_trunc_pymc = change_dist_size(gamma_trunc_pymc, new_size=x.shape)
+    logp_resized_pymc = logp(resized_gamma_trunc_pymc, x).eval()
+    np.testing.assert_allclose(
+        logp_resized_pymc,
+        logp_scipy,
+    )
+
+
+def test_vectorized_bounds():
+    with Model() as m:
+        x1 = TruncatedNormal("x1", lower=None, upper=0, initval=-1)
+        x2 = TruncatedNormal("x2", lower=0, upper=None, initval=1)
+        x3 = TruncatedNormal("x3", lower=-np.pi, upper=np.e, initval=-1)
+        x4 = TruncatedNormal("x4", lower=None, upper=None, initval=1)
+
+        xs = TruncatedNormal(
+            "xs",
+            lower=[-np.inf, 0, -np.pi, -np.inf],
+            upper=[0, np.inf, np.e, np.inf],
+            initval=[-1, 1, -1, 1],
+        )
+        xs_sym = Truncated(
+            "xs_sym",
+            dist=rejection_normal(),
+            lower=[-np.inf, 0, -np.pi, -np.inf],
+            upper=[0, np.inf, np.e, np.inf],
+            initval=[-1, 1, -1, 1],
+        )
+
+    ip = m.initial_point()
+    np.testing.assert_allclose(
+        np.stack([ip[f"x{i + 1}_interval__"] for i in range(4)]),
+        ip["xs_interval__"],
+    )
+    np.testing.assert_allclose(
+        ip["xs_interval__"],
+        ip["xs_sym_interval__"],
+    )
+    np.testing.assert_allclose(
+        m.rvs_to_transforms[xs].backward(ip["xs_interval__"], *xs.owner.inputs).eval(),
+        [-1, 1, -1, 1],
+    )
+    np.testing.assert_allclose(
+        m.rvs_to_transforms[xs_sym].backward(ip["xs_sym_interval__"], *xs_sym.owner.inputs).eval(),
+        [-1, 1, -1, 1],
+    )
+    *x_logp, xs_logp, xs_sym_logp = m.compile_logp(sum=False)(ip)
+    assert np.all(np.isfinite(xs_logp))
+    np.testing.assert_allclose(
+        np.stack(x_logp),
+        xs_logp,
+    )
+    np.testing.assert_allclose(
+        xs_logp,
+        xs_sym_logp,
+    )

@@ -12,7 +12,7 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-# Contains code from Aeppl, Copyright (c) 2021-2022, PyTensor Developers.
+# Contains code from AePPL, Copyright (c) 2021-2022, Aesara Developers.
 
 # coding: utf-8
 """
@@ -36,10 +36,9 @@ from pytensor.tensor.extra_ops import broadcast_shape
 from pytensor.tensor.math import tanh
 from pytensor.tensor.random.basic import (
     BetaRV,
+    _gamma,
     cauchy,
-    chisquare,
     exponential,
-    gamma,
     gumbel,
     halfcauchy,
     halfnormal,
@@ -49,14 +48,16 @@ from pytensor.tensor.random.basic import (
     lognormal,
     normal,
     pareto,
+    t,
     triangular,
     uniform,
     vonmises,
 )
 from pytensor.tensor.random.op import RandomVariable
-from pytensor.tensor.var import TensorConstant
+from pytensor.tensor.variable import TensorConstant
 
-from pymc.logprob.abstract import _logcdf_helper, _logprob_helper
+from pymc.logprob.abstract import _logprob_helper
+from pymc.logprob.basic import icdf
 
 try:
     from polyagamma import polyagamma_cdf, polyagamma_pdf, random_polyagamma
@@ -567,11 +568,13 @@ class TruncatedNormalRV(RandomVariable):
         upper: Union[np.ndarray, float],
         size: Optional[Union[List[int], int]],
     ) -> np.ndarray:
+        # Upcast to float64. (Caller will downcast to desired dtype if needed)
+        #   (Work-around for https://github.com/scipy/scipy/issues/15928)
         return stats.truncnorm.rvs(
-            a=(lower - mu) / sigma,
-            b=(upper - mu) / sigma,
-            loc=mu,
-            scale=sigma,
+            a=((lower - mu) / sigma).astype("float64"),
+            b=((upper - mu) / sigma).astype("float64"),
+            loc=(mu).astype("float64"),
+            scale=(sigma).astype("float64"),
             size=size,
             random_state=rng,
         )
@@ -663,7 +666,7 @@ class TruncatedNormal(BoundedContinuous):
     @classmethod
     def dist(
         cls,
-        mu: Optional[DIST_PARAMETER_TYPES] = None,
+        mu: Optional[DIST_PARAMETER_TYPES] = 0,
         sigma: Optional[DIST_PARAMETER_TYPES] = None,
         *,
         tau: Optional[DIST_PARAMETER_TYPES] = None,
@@ -673,7 +676,6 @@ class TruncatedNormal(BoundedContinuous):
     ) -> RandomVariable:
         tau, sigma = get_tau_sigma(tau=tau, sigma=sigma)
         sigma = pt.as_tensor_variable(sigma)
-        tau = pt.as_tensor_variable(tau)
         mu = pt.as_tensor_variable(floatX(mu))
 
         lower = pt.as_tensor_variable(floatX(lower)) if lower is not None else pt.constant(-np.inf)
@@ -855,6 +857,11 @@ class HalfNormal(PositiveContinuous):
             sigma > 0,
             msg="sigma > 0",
         )
+
+    def icdf(value, loc, sigma):
+        res = icdf(Normal.dist(loc, sigma), (value + 1.0) / 2.0)
+        res = check_icdf_value(res, value)
+        return res
 
 
 class WaldRV(RandomVariable):
@@ -1721,23 +1728,12 @@ class LogNormal(PositiveContinuous):
             msg="sigma > 0",
         )
 
+    def icdf(value, mu, sigma):
+        res = pt.exp(icdf(Normal.dist(mu, sigma), value))
+        return res
+
 
 Lognormal = LogNormal
-
-
-class StudentTRV(RandomVariable):
-    name = "studentt"
-    ndim_supp = 0
-    ndims_params = [0, 0, 0]
-    dtype = "floatX"
-    _print_name = ("StudentT", "\\operatorname{StudentT}")
-
-    @classmethod
-    def rng_fn(cls, rng, nu, mu, sigma, size=None) -> np.ndarray:
-        return np.asarray(stats.t.rvs(nu, mu, sigma, size=size, random_state=rng))
-
-
-studentt = StudentTRV()
 
 
 class StudentT(Continuous):
@@ -1804,7 +1800,7 @@ class StudentT(Continuous):
         with pm.Model():
             x = pm.StudentT('x', nu=15, mu=0, lam=1/23)
     """
-    rv_op = studentt
+    rv_op = t
 
     @classmethod
     def dist(cls, nu, mu=0, *, sigma=None, lam=None, **kwargs):
@@ -2039,6 +2035,15 @@ class Cauchy(Continuous):
             msg="beta > 0",
         )
 
+    def icdf(value, alpha, beta):
+        res = alpha + beta * pt.tan(np.pi * (value - 0.5))
+        res = check_icdf_value(res, value)
+        return check_parameters(
+            res,
+            beta > 0,
+            msg="beta > 0",
+        )
+
 
 class HalfCauchy(PositiveContinuous):
     r"""
@@ -2113,6 +2118,15 @@ class HalfCauchy(PositiveContinuous):
             msg="beta > 0",
         )
 
+    def icdf(value, loc, beta):
+        res = loc + beta * pt.tan(np.pi * (value) / 2.0)
+        res = check_icdf_value(res, value)
+        return check_parameters(
+            res,
+            beta > 0,
+            msg="beta > 0",
+        )
+
 
 class Gamma(PositiveContinuous):
     r"""
@@ -2173,16 +2187,17 @@ class Gamma(PositiveContinuous):
     sigma : tensor_like of float, optional
         Alternative scale parameter (sigma > 0).
     """
-    rv_op = gamma
+    # gamma is temporarily a deprecation wrapper in PyTensor
+    rv_op = _gamma
 
     @classmethod
     def dist(cls, alpha=None, beta=None, mu=None, sigma=None, **kwargs):
         alpha, beta = cls.get_alpha_beta(alpha, beta, mu, sigma)
         alpha = pt.as_tensor_variable(floatX(alpha))
         beta = pt.as_tensor_variable(floatX(beta))
-
-        # The PyTensor `GammaRV` `Op` will invert the `beta` parameter itself
-        return super().dist([alpha, beta], **kwargs)
+        # PyTensor gamma op is parametrized in terms of scale (1/beta)
+        scale = pt.reciprocal(beta)
+        return super().dist([alpha, scale], **kwargs)
 
     @classmethod
     def get_alpha_beta(cls, alpha=None, beta=None, mu=None, sigma=None):
@@ -2204,15 +2219,14 @@ class Gamma(PositiveContinuous):
 
         return alpha, beta
 
-    def moment(rv, size, alpha, inv_beta):
-        # The PyTensor `GammaRV` `Op` inverts the `beta` parameter itself
-        mean = alpha * inv_beta
+    def moment(rv, size, alpha, scale):
+        mean = alpha * scale
         if not rv_size_is_none(size):
             mean = pt.full(size, mean)
         return mean
 
-    def logp(value, alpha, inv_beta):
-        beta = pt.reciprocal(inv_beta)
+    def logp(value, alpha, scale):
+        beta = pt.reciprocal(scale)
         res = -pt.gammaln(alpha) + logpow(beta, alpha) - beta * value + logpow(value, alpha - 1)
         res = pt.switch(pt.ge(value, 0.0), res, -np.inf)
         return check_parameters(
@@ -2222,14 +2236,13 @@ class Gamma(PositiveContinuous):
             msg="alpha > 0, beta > 0",
         )
 
-    def logcdf(value, alpha, inv_beta):
-        beta = pt.reciprocal(inv_beta)
+    def logcdf(value, alpha, scale):
+        beta = pt.reciprocal(scale)
         res = pt.switch(
             pt.lt(value, 0),
             -np.inf,
             pt.log(pt.gammainc(alpha, beta * value)),
         )
-
         return check_parameters(res, 0 < alpha, 0 < beta, msg="alpha > 0, beta > 0")
 
 
@@ -2348,15 +2361,20 @@ class InverseGamma(PositiveContinuous):
         )
 
 
-class ChiSquared(PositiveContinuous):
+class ChiSquared:
     r"""
     :math:`\chi^2` log-likelihood.
+
+    This is the distribution from the sum of the squares of :math:`\nu` independent standard normal random variables or a special
+    case of the gamma distribution with :math:`\alpha = \nu/2` and :math:`\beta = 1/2`.
 
     The pdf of this distribution is
 
     .. math::
 
        f(x \mid \nu) = \frac{x^{(\nu-2)/2}e^{-x/2}}{2^{\nu/2}\Gamma(\nu/2)}
+
+    Read more about the :math:`\chi^2` distribution at https://en.wikipedia.org/wiki/Chi-squared_distribution
 
     .. plot::
         :context: close-figs
@@ -2387,24 +2405,13 @@ class ChiSquared(PositiveContinuous):
     nu : tensor_like of float
         Degrees of freedom (nu > 0).
     """
-    rv_op = chisquare
+
+    def __new__(cls, name, nu, **kwargs):
+        return Gamma(name, alpha=nu / 2, beta=1 / 2, **kwargs)
 
     @classmethod
-    def dist(cls, nu, *args, **kwargs):
-        nu = pt.as_tensor_variable(floatX(nu))
-        return super().dist([nu], *args, **kwargs)
-
-    def moment(rv, size, nu):
-        moment = nu
-        if not rv_size_is_none(size):
-            moment = pt.full(size, moment)
-        return moment
-
-    def logp(value, nu):
-        return _logprob_helper(Gamma.dist(alpha=nu / 2, beta=0.5), value)
-
-    def logcdf(value, nu):
-        return _logcdf_helper(Gamma.dist(alpha=nu / 2, beta=0.5), value)
+    def dist(cls, nu, **kwargs):
+        return Gamma.dist(alpha=nu / 2, beta=1 / 2, **kwargs)
 
 
 # TODO: Remove this once logp for multiplication is working!
@@ -2511,6 +2518,16 @@ class Weibull(PositiveContinuous):
             - pt.pow(value / beta, alpha)
         )
         res = pt.switch(pt.ge(value, 0.0), res, -np.inf)
+        return check_parameters(
+            res,
+            alpha > 0,
+            beta > 0,
+            msg="alpha > 0, beta > 0",
+        )
+
+    def icdf(value, alpha, beta):
+        res = beta * (-pt.log(1 - value)) ** (1 / alpha)
+        res = check_icdf_value(res, value)
         return check_parameters(
             res,
             alpha > 0,
@@ -3061,6 +3078,20 @@ class Triangular(BoundedContinuous):
             msg="lower <= c <= upper",
         )
 
+    def icdf(value, lower, c, upper):
+        res = pt.switch(
+            pt.lt(value, ((c - lower) / (upper - lower))),
+            lower + np.sqrt((upper - lower) * (c - lower) * value),
+            upper - np.sqrt((upper - lower) * (upper - c) * (1 - value)),
+        )
+        res = check_icdf_value(res, value)
+        return check_parameters(
+            res,
+            lower <= c,
+            c <= upper,
+            msg="lower <= c <= upper",
+        )
+
 
 @_default_transform.register(Triangular)
 def triangular_default_transform(op, rv):
@@ -3069,7 +3100,11 @@ def triangular_default_transform(op, rv):
 
 class Gumbel(Continuous):
     r"""
-    Univariate Gumbel log-likelihood.
+    Univariate right-skewed Gumbel log-likelihood.
+
+    This distribution is typically used for modeling maximum (or extreme) values.
+    Those looking to find the extreme minimum provided by the left-skewed Gumbel should
+    invert the sign of all x and mu values.
 
     The pdf of this distribution is
 
@@ -3143,6 +3178,15 @@ class Gumbel(Continuous):
     def logcdf(value, mu, beta):
         res = -pt.exp(-(value - mu) / beta)
 
+        return check_parameters(
+            res,
+            beta > 0,
+            msg="beta > 0",
+        )
+
+    def icdf(value, mu, beta):
+        res = mu - beta * pt.log(-pt.log(value))
+        res = check_icdf_value(res, value)
         return check_parameters(
             res,
             beta > 0,
@@ -3351,6 +3395,15 @@ class Logistic(Continuous):
     def logcdf(value, mu, s):
         res = -pt.log1pexp(-(value - mu) / s)
 
+        return check_parameters(
+            res,
+            s > 0,
+            msg="s > 0",
+        )
+
+    def icdf(value, mu, s):
+        res = mu + s * pt.log(value / (1 - value))
+        res = check_icdf_value(res, value)
         return check_parameters(
             res,
             s > 0,
@@ -3696,6 +3749,15 @@ class Moyal(Continuous):
             msg="sigma > 0",
         )
 
+    def icdf(value, mu, sigma):
+        res = sigma * -pt.log(2.0 * pt.erfcinv(value) ** 2) + mu
+        res = check_icdf_value(res, value)
+        return check_parameters(
+            res,
+            sigma > 0,
+            msg="sigma > 0",
+        )
+
 
 class PolyaGammaRV(RandomVariable):
     """Polya-Gamma random variable."""
@@ -3797,7 +3859,8 @@ class PolyaGamma(PositiveContinuous):
         import matplotlib.pyplot as plt
         import numpy as np
         from polyagamma import polyagamma_pdf
-        plt.style.use('seaborn-darkgrid')
+        import arviz as az
+        plt.style.use('arviz-darkgrid')
         x = np.linspace(0.01, 5, 500);x.sort()
         hs = [1., 5., 10., 15.]
         zs = [0.] * 4
@@ -3811,7 +3874,7 @@ class PolyaGamma(PositiveContinuous):
 
     ========  =============================
     Support   :math:`x \in (0, \infty)`
-    Mean      :math:`dfrac{h}{4} if :math:`z=0`, :math:`\dfrac{tanh(z/2)h}{2z}` otherwise.
+    Mean      :math:`\dfrac{h}{4}` if :math:`z=0`, :math:`\dfrac{tanh(z/2)h}{2z}` otherwise.
     Variance  :math:`0.041666688h` if :math:`z=0`, :math:`\dfrac{h(sinh(z) - z)(1 - tanh^2(z/2))}{4z^3}` otherwise.
     ========  =============================
 

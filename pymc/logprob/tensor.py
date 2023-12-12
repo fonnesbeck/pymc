@@ -41,9 +41,8 @@ import pytensor
 from pytensor import tensor as pt
 from pytensor.graph.op import compute_test_value
 from pytensor.graph.rewriting.basic import node_rewriter
-from pytensor.tensor.basic import Join, MakeVector
+from pytensor.tensor.basic import Alloc, Join, MakeVector
 from pytensor.tensor.elemwise import DimShuffle
-from pytensor.tensor.extra_ops import BroadcastTo
 from pytensor.tensor.random.op import RandomVariable
 from pytensor.tensor.random.rewriting import (
     local_dimshuffle_rv_lift,
@@ -56,12 +55,13 @@ from pymc.logprob.rewriting import (
     assume_measured_ir_outputs,
     measurable_ir_rewrites_db,
 )
-from pymc.logprob.utils import check_potential_measurability
+from pymc.logprob.utils import check_potential_measurability, replace_rvs_by_values
+from pymc.pytensorf import constant_fold
 
 
-@node_rewriter([BroadcastTo])
+@node_rewriter([Alloc])
 def naive_bcast_rv_lift(fgraph, node):
-    """Lift a ``BroadcastTo`` through a ``RandomVariable`` ``Op``.
+    """Lift an ``Alloc`` through a ``RandomVariable`` ``Op``.
 
     XXX: This implementation simply broadcasts the ``RandomVariable``'s
     parameters, which won't always work (e.g. multivariate distributions).
@@ -73,7 +73,7 @@ def naive_bcast_rv_lift(fgraph, node):
     """
 
     if not (
-        isinstance(node.op, BroadcastTo)
+        isinstance(node.op, Alloc)
         and node.inputs[0].owner
         and isinstance(node.inputs[0].owner.op, RandomVariable)
     ):
@@ -93,7 +93,7 @@ def naive_bcast_rv_lift(fgraph, node):
         return None
 
     if not bcast_shape:
-        # The `BroadcastTo` is broadcasting a scalar to a scalar (i.e. doing nothing)
+        # The `Alloc` is broadcasting a scalar to a scalar (i.e. doing nothing)
         assert rv_var.ndim == 0
         return [rv_var]
 
@@ -132,7 +132,6 @@ MeasurableVariable.register(MeasurableMakeVector)
 def logprob_make_vector(op, values, *base_rvs, **kwargs):
     """Compute the log-likelihood graph for a `MeasurableMakeVector`."""
     # TODO: Sort out this circular dependency issue
-    from pymc.pytensorf import replace_rvs_by_values
 
     (value,) = values
 
@@ -159,9 +158,6 @@ MeasurableVariable.register(MeasurableJoin)
 @_logprob.register(MeasurableJoin)
 def logprob_join(op, values, axis, *base_rvs, **kwargs):
     """Compute the log-likelihood graph for a `Join`."""
-    # TODO: Find better way to avoid circular dependency
-    from pymc.pytensorf import constant_fold, replace_rvs_by_values
-
     (value,) = values
 
     base_rv_shapes = [base_var.shape[axis] for base_var in base_rvs]

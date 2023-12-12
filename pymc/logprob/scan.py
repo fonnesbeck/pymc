@@ -50,7 +50,7 @@ from pytensor.scan.rewriting import scan_eqopt1, scan_eqopt2
 from pytensor.scan.utils import ScanArgs
 from pytensor.tensor.random.type import RandomType
 from pytensor.tensor.subtensor import Subtensor, indices_from_subtensor
-from pytensor.tensor.var import TensorVariable
+from pytensor.tensor.variable import TensorVariable
 from pytensor.updates import OrderedUpdates
 
 from pymc.logprob.abstract import MeasurableVariable, _logprob
@@ -62,7 +62,7 @@ from pymc.logprob.rewriting import (
     logprob_rewrites_db,
     measurable_ir_rewrites_db,
 )
-from pymc.pytensorf import replace_rvs_by_values
+from pymc.logprob.utils import replace_rvs_by_values
 
 
 class MeasurableScan(Scan):

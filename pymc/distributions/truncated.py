@@ -37,7 +37,7 @@ from pymc.distributions.distribution import (
 from pymc.distributions.shape_utils import _change_dist_size, change_dist_size, to_tuple
 from pymc.distributions.transforms import _default_transform
 from pymc.exceptions import TruncationError
-from pymc.logprob.abstract import MeasurableVariable, _logcdf, _logprob
+from pymc.logprob.abstract import _logcdf, _logprob
 from pymc.logprob.basic import icdf, logcdf
 from pymc.math import logdiffexp
 from pymc.util import check_dist_not_registered
@@ -62,9 +62,6 @@ class TruncatedRV(SymbolicRandomVariable):
         """Return the update mapping for the noise RV."""
         # Since RNG is a shared variable it shows up as the last node input
         return {node.inputs[-1]: node.outputs[0]}
-
-
-MeasurableVariable.register(TruncatedRV)
 
 
 @singledispatch
@@ -214,10 +211,14 @@ class Truncated(Distribution):
         # Fallback to rejection sampling
         def loop_fn(truncated_rv, reject_draws, lower, upper, rng, *rv_inputs):
             next_rng, new_truncated_rv = dist.owner.op.make_node(rng, *rv_inputs).outputs
-            truncated_rv = pt.set_subtensor(
-                truncated_rv[reject_draws],
-                new_truncated_rv[reject_draws],
-            )
+            # Avoid scalar boolean indexing
+            if truncated_rv.type.ndim == 0:
+                truncated_rv = new_truncated_rv
+            else:
+                truncated_rv = pt.set_subtensor(
+                    truncated_rv[reject_draws],
+                    new_truncated_rv[reject_draws],
+                )
             reject_draws = pt.or_((truncated_rv < lower), (truncated_rv > upper))
 
             return (

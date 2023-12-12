@@ -31,7 +31,7 @@ from pytensor.graph.op import Op, compute_test_value
 from pytensor.raise_op import Assert
 from pytensor.tensor.random.op import RandomVariable
 from pytensor.tensor.shape import SpecifyShape
-from pytensor.tensor.var import TensorVariable
+from pytensor.tensor.variable import TensorVariable
 from typing_extensions import TypeAlias
 
 from pymc.model import modelcontext
@@ -59,8 +59,9 @@ def to_tuple(shape):
 
     Returns
     -------
-    If `shape` is None, returns an empty tuple. If it's an int, (shape,) is
-    returned. If it is array-like, tuple(shape) is returned.
+    shape : tuple
+        If `shape` is None, returns an empty tuple. If it's an int, (shape,) is
+        returned. If it is array-like, tuple(shape) is returned.
     """
     if shape is None:
         return tuple()
@@ -321,13 +322,15 @@ def change_dist_size(
 
     Returns
     -------
-    A new distribution variable that is equivalent to the original distribution with
-    the new size. The new distribution will not reuse the old RandomState/Generator
-    input, so it will be independent from the original distribution.
+    dist : TensorVariable
+        A new distribution variable that is equivalent to the original distribution with
+        the new size. The new distribution will not reuse the old RandomState/Generator
+        input, so it will be independent from the original distribution.
 
     Examples
     --------
     .. code-block:: python
+
         x = Normal.dist(shape=(2, 3))
         new_x = change_dist_size(x, new_size=(5, 3), expand=False)
         assert new_x.eval().shape == (5, 3)
@@ -406,7 +409,7 @@ def change_specify_shape_size(op, ss, new_size, expand) -> TensorVariable:
         if ndim_supp > 0:
             new_shapes[-ndim_supp:] = shapes[-ndim_supp:]
 
-    # specify_shape has a wrong signature https://github.com/pytensor-devs/pytensor/issues/1164
+    # specify_shape has a wrong signature https://github.com/aesara-devs/aesara/issues/1164
     return pt.specify_shape(new_var, new_shapes)  # type: ignore
 
 

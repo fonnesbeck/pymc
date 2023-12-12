@@ -539,7 +539,7 @@ class NormalMixture:
                 mu=data.mean(),
                 sigma=10,
                 shape=n_components,
-                transform=pm.transforms.ordered,
+                transform=pm.distributions.transforms.ordered,
                 initval=[1, 2, 3],
             )
             σ = pm.HalfNormal("σ", sigma=10, shape=n_components)
@@ -613,11 +613,13 @@ class ZeroInflatedPoisson:
         plt.ylabel('f(x)', fontsize=12)
         plt.legend(loc=1)
         plt.show()
+
     ========  ==========================
     Support   :math:`x \in \mathbb{N}_0`
     Mean      :math:`\psi\mu`
     Variance  :math:`\mu + \frac{1-\psi}{\psi}\mu^2`
     ========  ==========================
+
     Parameters
     ----------
     psi : tensor_like of float
@@ -674,11 +676,13 @@ class ZeroInflatedBinomial:
         plt.ylabel('f(x)', fontsize=12)
         plt.legend(loc=1)
         plt.show()
+
     ========  ==========================
     Support   :math:`x \in \mathbb{N}_0`
     Mean      :math:`\psi n p`
     Variance  :math:`(1-\psi) n p [1 - p(1 - \psi n)].`
     ========  ==========================
+
     Parameters
     ----------
     psi : tensor_like of float
@@ -750,6 +754,7 @@ class ZeroInflatedNegativeBinomial:
         plt.ylabel('f(x)', fontsize=12)
         plt.legend(loc=1)
         plt.show()
+
     ========  ==========================
     Support   :math:`x \in \mathbb{N}_0`
     Mean      :math:`\psi\mu`
@@ -1004,7 +1009,7 @@ class HurdleLogNormal:
     Parameters
     ----------
     psi : tensor_like of float
-        Expected proportion of Gamma variates (0 < psi < 1)
+        Expected proportion of LogNormal variates (0 < psi < 1)
     mu : tensor_like of float, default 0
         Location parameter.
     sigma : tensor_like of float, optional

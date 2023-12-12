@@ -11,6 +11,8 @@
 #   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
+import warnings
+
 from functools import singledispatch
 
 import numpy as np
@@ -22,32 +24,48 @@ from numpy.core.numeric import normalize_axis_tuple  # type: ignore
 from pytensor.graph import Op
 from pytensor.tensor import TensorVariable
 
+import pymc as pm
+
 from pymc.logprob.transforms import (
+    ChainedTransform,
     CircularTransform,
     IntervalTransform,
     LogOddsTransform,
     LogTransform,
-    RVTransform,
     SimplexTransform,
+    Transform,
 )
 
 __all__ = [
-    "RVTransform",
+    "Transform",
     "simplex",
     "logodds",
     "Interval",
     "log_exp_m1",
-    "univariate_ordered",
-    "multivariate_ordered",
+    "ordered",
     "log",
     "sum_to_1",
-    "univariate_sum_to_1",
-    "multivariate_sum_to_1",
     "circular",
     "CholeskyCovPacked",
     "Chain",
     "ZeroSumTransform",
 ]
+
+
+def __getattr__(name):
+    if name in ("univariate_ordered", "multivariate_ordered"):
+        warnings.warn(f"{name} has been deprecated, use ordered instead.", FutureWarning)
+        return ordered
+
+    if name in ("univariate_sum_to_1", "multivariate_sum_to_1"):
+        warnings.warn(f"{name} has been deprecated, use sum_to_1 instead.", FutureWarning)
+        return sum_to_1
+
+    if name == "RVTransform":
+        warnings.warn("RVTransform has been renamed to Transform", FutureWarning)
+        return Transform
+
+    raise AttributeError(f"module {__name__} has no attribute {name}")
 
 
 @singledispatch
@@ -56,7 +74,7 @@ def _default_transform(op: Op, rv: TensorVariable):
     return None
 
 
-class LogExpM1(RVTransform):
+class LogExpM1(Transform):
     name = "log_exp_m1"
 
     def backward(self, value, *inputs):
@@ -74,37 +92,30 @@ class LogExpM1(RVTransform):
         return -pt.softplus(-value)
 
 
-class Ordered(RVTransform):
+class Ordered(Transform):
     name = "ordered"
 
-    def __init__(self, ndim_supp=0):
-        if ndim_supp > 1:
-            raise ValueError(
-                f"For Ordered transformation number of core dimensions"
-                f"(ndim_supp) must not exceed 1 but is {ndim_supp}"
-            )
-        self.ndim_supp = ndim_supp
+    def __init__(self, ndim_supp=None):
+        if ndim_supp is not None:
+            warnings.warn("ndim_supp argument is deprecated and has no effect", FutureWarning)
 
     def backward(self, value, *inputs):
         x = pt.zeros(value.shape)
-        x = pt.inc_subtensor(x[..., 0], value[..., 0])
-        x = pt.inc_subtensor(x[..., 1:], pt.exp(value[..., 1:]))
+        x = pt.set_subtensor(x[..., 0], value[..., 0])
+        x = pt.set_subtensor(x[..., 1:], pt.exp(value[..., 1:]))
         return pt.cumsum(x, axis=-1)
 
     def forward(self, value, *inputs):
         y = pt.zeros(value.shape)
-        y = pt.inc_subtensor(y[..., 0], value[..., 0])
-        y = pt.inc_subtensor(y[..., 1:], pt.log(value[..., 1:] - value[..., :-1]))
+        y = pt.set_subtensor(y[..., 0], value[..., 0])
+        y = pt.set_subtensor(y[..., 1:], pt.log(value[..., 1:] - value[..., :-1]))
         return y
 
     def log_jac_det(self, value, *inputs):
-        if self.ndim_supp == 0:
-            return pt.sum(value[..., 1:], axis=-1, keepdims=True)
-        else:
-            return pt.sum(value[..., 1:], axis=-1)
+        return pt.sum(value[..., 1:], axis=-1)
 
 
-class SumTo1(RVTransform):
+class SumTo1(Transform):
     """
     Transforms K - 1 dimensional simplex space (k values in [0,1] and that sum to 1) to a K - 1 vector of values in [0,1]
     This Transformation operates on the last dimension of the input tensor.
@@ -112,13 +123,9 @@ class SumTo1(RVTransform):
 
     name = "sumto1"
 
-    def __init__(self, ndim_supp=0):
-        if ndim_supp > 1:
-            raise ValueError(
-                f"For SumTo1 transformation number of core dimensions"
-                f"(ndim_supp) must not exceed 1 but is {ndim_supp}"
-            )
-        self.ndim_supp = ndim_supp
+    def __init__(self, ndim_supp=None):
+        if ndim_supp is not None:
+            warnings.warn("ndim_supp argument is deprecated and has no effect", FutureWarning)
 
     def backward(self, value, *inputs):
         remaining = 1 - pt.sum(value[..., :], axis=-1, keepdims=True)
@@ -129,13 +136,10 @@ class SumTo1(RVTransform):
 
     def log_jac_det(self, value, *inputs):
         y = pt.zeros(value.shape)
-        if self.ndim_supp == 0:
-            return pt.sum(y, axis=-1, keepdims=True)
-        else:
-            return pt.sum(y, axis=-1)
+        return pt.sum(y, axis=-1)
 
 
-class CholeskyCovPacked(RVTransform):
+class CholeskyCovPacked(Transform):
     """
     Transforms the diagonal elements of the LKJCholeskyCov distribution to be on the
     log scale
@@ -163,45 +167,7 @@ class CholeskyCovPacked(RVTransform):
         return pt.sum(value[..., self.diag_idxs], axis=-1)
 
 
-class Chain(RVTransform):
-    __slots__ = ("param_extract_fn", "transform_list", "name")
-
-    def __init__(self, transform_list):
-        self.transform_list = transform_list
-        self.name = "+".join([transf.name for transf in self.transform_list])
-
-    def forward(self, value, *inputs):
-        y = value
-        for transf in self.transform_list:
-            # TODO:Needs proper discussion as to what should be
-            # passed as inputs here
-            y = transf.forward(y, *inputs)
-        return y
-
-    def backward(self, value, *inputs):
-        x = value
-        for transf in reversed(self.transform_list):
-            x = transf.backward(x, *inputs)
-        return x
-
-    def log_jac_det(self, value, *inputs):
-        y = pt.as_tensor_variable(value)
-        det_list = []
-        ndim0 = y.ndim
-        for transf in reversed(self.transform_list):
-            det_ = transf.log_jac_det(y, *inputs)
-            det_list.append(det_)
-            y = transf.backward(y, *inputs)
-            ndim0 = min(ndim0, det_.ndim)
-        # match the shape of the smallest log_jac_det
-        det = 0.0
-        for det_ in det_list:
-            if det_.ndim > ndim0:
-                det += det_.sum(axis=-1)
-            else:
-                det += det_
-        return det
-
+Chain = ChainedTransform
 
 simplex = SimplexTransform()
 simplex.__doc__ = """
@@ -298,7 +264,7 @@ class Interval(IntervalTransform):
         super().__init__(args_fn=bounds_fn)
 
 
-class ZeroSumTransform(RVTransform):
+class ZeroSumTransform(Transform):
     """
     Constrains any random samples to sum to zero along the user-provided ``zerosum_axes``.
 
@@ -315,41 +281,41 @@ class ZeroSumTransform(RVTransform):
     def __init__(self, zerosum_axes):
         self.zerosum_axes = tuple(int(axis) for axis in zerosum_axes)
 
+    @staticmethod
+    def extend_axis(array, axis):
+        n = pm.floatX(array.shape[axis] + 1)
+        sum_vals = array.sum(axis, keepdims=True)
+        norm = sum_vals / (pt.sqrt(n) + n)
+        fill_val = norm - sum_vals / pt.sqrt(n)
+
+        out = pt.concatenate([array, fill_val], axis=axis)
+        return out - norm
+
+    @staticmethod
+    def extend_axis_rev(array, axis):
+        normalized_axis = normalize_axis_tuple(axis, array.ndim)[0]
+
+        n = pm.floatX(array.shape[normalized_axis])
+        last = pt.take(array, [-1], axis=normalized_axis)
+
+        sum_vals = -last * pt.sqrt(n)
+        norm = sum_vals / (pt.sqrt(n) + n)
+        slice_before = (slice(None, None),) * normalized_axis
+
+        return array[slice_before + (slice(None, -1),)] + norm
+
     def forward(self, value, *rv_inputs):
         for axis in self.zerosum_axes:
-            value = extend_axis_rev(value, axis=axis)
+            value = self.extend_axis_rev(value, axis=axis)
         return value
 
     def backward(self, value, *rv_inputs):
         for axis in self.zerosum_axes:
-            value = extend_axis(value, axis=axis)
+            value = self.extend_axis(value, axis=axis)
         return value
 
     def log_jac_det(self, value, *rv_inputs):
         return pt.constant(0.0)
-
-
-def extend_axis(array, axis):
-    n = array.shape[axis] + 1
-    sum_vals = array.sum(axis, keepdims=True)
-    norm = sum_vals / (pt.sqrt(n) + n)
-    fill_val = norm - sum_vals / pt.sqrt(n)
-
-    out = pt.concatenate([array, fill_val], axis=axis)
-    return out - norm
-
-
-def extend_axis_rev(array, axis):
-    normalized_axis = normalize_axis_tuple(axis, array.ndim)[0]
-
-    n = array.shape[normalized_axis]
-    last = pt.take(array, [-1], axis=normalized_axis)
-
-    sum_vals = -last * pt.sqrt(n)
-    norm = sum_vals / (pt.sqrt(n) + n)
-    slice_before = (slice(None, None),) * normalized_axis
-
-    return array[slice_before + (slice(None, -1),)] + norm
 
 
 log_exp_m1 = LogExpM1()
@@ -357,38 +323,21 @@ log_exp_m1.__doc__ = """
 Instantiation of :class:`pymc.distributions.transforms.LogExpM1`
 for use in the ``transform`` argument of a random variable."""
 
-univariate_ordered = Ordered(ndim_supp=0)
-univariate_ordered.__doc__ = """
+# Deprecated
+ordered = Ordered()
+ordered.__doc__ = """
 Instantiation of :class:`pymc.distributions.transforms.Ordered`
-for use in the ``transform`` argument of a univariate random variable."""
-
-multivariate_ordered = Ordered(ndim_supp=1)
-multivariate_ordered.__doc__ = """
-Instantiation of :class:`pymc.distributions.transforms.Ordered`
-for use in the ``transform`` argument of a multivariate random variable."""
+for use in the ``transform`` argument of a random variable."""
 
 log = LogTransform()
 log.__doc__ = """
 Instantiation of :class:`pymc.logprob.transforms.LogTransform`
 for use in the ``transform`` argument of a random variable."""
 
-univariate_sum_to_1 = SumTo1(ndim_supp=0)
-univariate_sum_to_1.__doc__ = """
-Instantiation of :class:`pymc.distributions.transforms.SumTo1`
-for use in the ``transform`` argument of a univariate random variable."""
-
-multivariate_sum_to_1 = SumTo1(ndim_supp=1)
-multivariate_sum_to_1.__doc__ = """
-Instantiation of :class:`pymc.distributions.transforms.SumTo1`
-for use in the ``transform`` argument of a multivariate random variable."""
-
-# backwards compatibility
-sum_to_1 = SumTo1(ndim_supp=1)
+sum_to_1 = SumTo1()
 sum_to_1.__doc__ = """
 Instantiation of :class:`pymc.distributions.transforms.SumTo1`
-for use in the ``transform`` argument of a random variable.
-This instantiation is for backwards compatibility only.
-Please use `univariate_sum_to_1` or `multivariate_sum_to_1` instead."""
+for use in the ``transform`` argument of a random variable."""
 
 circular = CircularTransform()
 circular.__doc__ = """

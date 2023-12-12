@@ -12,7 +12,7 @@ dependencies:
 - numpy>=1.15.0
 - pandas>=0.24.0
 - pip
-- pytensor>=2.12.0,<2.13
+- pytensor>=2.18.1,<2.19
 - python-graphviz
 - scipy>=1.4.1
 - typing-extensions>=3.7.4
@@ -22,8 +22,9 @@ dependencies:
 - jupyter-sphinx
 - myst-nb
 - numpydoc
+- polyagamma
 - pre-commit>=2.8.0
-- pymc-sphinx-theme==0.13
+- pymc-sphinx-theme==0.14
 - sphinx-copybutton
 - sphinx-design
 - sphinx-notfound-page

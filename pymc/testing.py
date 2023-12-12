@@ -36,14 +36,12 @@ from pymc.distributions.distribution import Distribution
 from pymc.distributions.shape_utils import change_dist_size
 from pymc.initial_point import make_initial_point_fn
 from pymc.logprob.basic import icdf, logcdf, logp, transformed_conditional_logp
-from pymc.logprob.utils import ParameterValueError, find_rvs_in_graph
-from pymc.pytensorf import (
-    compile_pymc,
-    floatX,
-    inputvars,
-    intX,
+from pymc.logprob.utils import (
+    ParameterValueError,
     local_check_parameter_to_ninf_switch,
+    rvs_in_graph,
 )
+from pymc.pytensorf import compile_pymc, floatX, inputvars, intX
 
 # This mode can be used for tests where model compilations takes the bulk of the runtime
 # AND where we don't care about posterior numerical or sampling stability (e.g., when
@@ -775,24 +773,7 @@ def discrete_random_tester(
         assert p > alpha, str(point)
 
 
-class SeededTest:
-    random_seed = 20160911
-    random_state = None
-
-    @classmethod
-    def setup_class(cls):
-        nr.seed(cls.random_seed)
-
-    def setup_method(self):
-        nr.seed(self.random_seed)
-
-    def get_random_state(self, reset=False):
-        if self.random_state is None or reset:
-            self.random_state = nr.RandomState(self.random_seed)
-        return self.random_state
-
-
-class BaseTestDistributionRandom(SeededTest):
+class BaseTestDistributionRandom:
     """
     Base class for tests that new RandomVariables are correctly
     implemented, and that the mapping of parameters between the PyMC
@@ -863,6 +844,7 @@ class BaseTestDistributionRandom(SeededTest):
     sizes_to_check: Optional[List] = None
     sizes_expected: Optional[List] = None
     repeated_params_shape = 5
+    random_state = None
 
     def test_distribution(self):
         self.validate_tests_list()
@@ -885,6 +867,11 @@ class BaseTestDistributionRandom(SeededTest):
                     getattr(self, check_name)()
             else:
                 getattr(self, check_name)()
+
+    def get_random_state(self, reset=False):
+        if self.random_state is None or reset:
+            self.random_state = nr.RandomState(20160911)
+        return self.random_state
 
     def _instantiate_pymc_rv(self, dist_params=None):
         params = dist_params if dist_params else self.pymc_dist_params
@@ -963,6 +950,6 @@ def seeded_numpy_distribution_builder(dist_name: str) -> Callable:
 def assert_no_rvs(vars: Sequence[Variable]) -> None:
     """Assert that there are no `MeasurableVariable` nodes in a graph."""
 
-    rvs = find_rvs_in_graph(vars)
+    rvs = rvs_in_graph(vars)
     if rvs:
         raise AssertionError(f"RV found in graph: {rvs}")
