@@ -26,6 +26,7 @@ import numpy as np
 import pytensor.tensor as pt
 
 from arviz.data.base import make_attrs
+from jax.experimental.maps import SerialLoop, xmap
 from jax.lax import scan
 from pytensor.compile import SharedVariable, Supervisor, mode
 from pytensor.graph.basic import graph_inputs
@@ -185,7 +186,8 @@ def _postprocess_samples(
     jax_fn: Callable,
     raw_mcmc_samples: List[TensorVariable],
     postprocessing_backend: Optional[Literal["cpu", "gpu"]] = None,
-    postprocessing_vectorize: Literal["vmap", "scan"] = "scan",
+    postprocessing_vectorize: Literal["vmap", "scan", "xmap"] = "scan",
+    num_chunks: Optional[int] = 10,
 ) -> List[TensorVariable]:
     if postprocessing_vectorize == "scan":
         t_raw_mcmc_samples = [jnp.swapaxes(t, 0, 1) for t in raw_mcmc_samples]
@@ -198,6 +200,15 @@ def _postprocess_samples(
         return [jnp.swapaxes(t, 0, 1) for t in outs]
     elif postprocessing_vectorize == "vmap":
         return jax.vmap(jax.vmap(jax_fn))(*_device_put(raw_mcmc_samples, postprocessing_backend))
+    elif postprocessing_vectorize == "xmap":
+        loop = xmap(
+            jax_fn,
+            in_axes=["chain", "samples", ...],
+            out_axes=["chain", "samples", ...],
+            axis_resources={"samples": SerialLoop(num_chunks)},
+        )
+        f = xmap(loop, in_axes=[...], out_axes=[...])
+        return f(*jax.device_put(raw_mcmc_samples, jax.devices(postprocessing_backend)[0]))
     else:
         raise ValueError(f"Unrecognized postprocessing_vectorize: {postprocessing_vectorize}")
 
