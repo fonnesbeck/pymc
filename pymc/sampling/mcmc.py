@@ -54,7 +54,11 @@ from pymc.blocking import DictToArrayBijection
 from pymc.exceptions import SamplingError
 from pymc.initial_point import PointType, StartDict, make_initial_point_fns_per_chain
 from pymc.model import Model, modelcontext
-from pymc.progress_bar import ProgressBarManager, ProgressBarType, default_progress_theme
+from pymc.progress_bar import (
+    ProgressBarManager,
+    ProgressBarType,
+    default_progress_theme,
+)
 from pymc.sampling.parallel import Draw, _cpu_count
 from pymc.sampling.population import _sample_population
 from pymc.stats.convergence import (
@@ -1206,6 +1210,8 @@ def _sample_many(
         tune=kwargs.get("tune", 0),
         progressbar=kwargs.get("progressbar", True),
         progressbar_theme=kwargs.get("progressbar_theme", default_progress_theme),
+        backend=kwargs.get("progress_backend"),
+        show_stats=kwargs.get("show_stats"),
     )
 
     with progress_manager:
@@ -1383,6 +1389,8 @@ def _mp_sample(
     start: Sequence[PointType],
     progressbar: bool = True,
     progressbar_theme: Theme | None = default_progress_theme,
+    progress_backend: str | None = None,
+    show_stats: list[str] | None = None,
     traces: Sequence[IBaseTrace],
     model: Model | None = None,
     callback: SamplingIteratorCallback | None = None,
@@ -1451,6 +1459,8 @@ def _mp_sample(
         step_method=step,
         progressbar=progressbar,
         progressbar_theme=progressbar_theme,
+        progress_backend=progress_backend,
+        show_stats=show_stats,
         blas_cores=blas_cores,
         mp_ctx=mp_ctx,
         zarr_chains=zarr_chains,

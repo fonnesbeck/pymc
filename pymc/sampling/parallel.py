@@ -426,6 +426,8 @@ class ParallelSampler:
         step_method,
         progressbar: bool = True,
         progressbar_theme: Theme | None = default_progress_theme,
+        progress_backend: str | None = None,
+        show_stats: list[str] | None = None,
         blas_cores: int | None = None,
         mp_ctx=None,
         zarr_chains: list[ZarrChain] | None = None,
@@ -489,6 +491,8 @@ class ParallelSampler:
             tune=tune,
             progressbar=progressbar,
             progressbar_theme=progressbar_theme,
+            backend=progress_backend,
+            show_stats=show_stats,
         )
 
     def _make_active(self):
